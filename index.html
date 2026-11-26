@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Saver</title>
+<style>
+:root{
+  --bg:#f6f5f2; --panel:#ffffff; --ink:#1d1c1a; --muted:#6c6a64; --line:#e4e1da; --soft:#efede7;
+  --accent:#1f6fd1; --accent-ink:#fff; --ok:#1f7a4d; --warn:#a86a00; --bad:#b3261e;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#151413; --panel:#1f1e1c; --ink:#ecebe7; --muted:#a19e96; --line:#33312d; --soft:#292825;
+  --accent:#5aa2f2; --accent-ink:#06182c; --ok:#5cc28e; --warn:#e2a53b; --bad:#f08279;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+button,select,input,textarea{font:inherit;color:inherit}
+.wrap{max-width:900px;margin:0 auto;padding:22px 22px 60px}
+header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+header img{width:40px;height:40px}
+header h1{font-size:21px;margin:0;font-weight:700;letter-spacing:-.2px}
+header .sp{flex:1}
+.btn{padding:8px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.small{padding:4px 10px;font-size:13px;border-radius:8px}
+.btn.link{border:0;background:none;color:var(--accent);padding:0;font-size:13px}
+.btn:disabled{opacity:.5;cursor:default}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.go{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.go textarea{flex:1 1 360px;min-width:0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);resize:vertical;min-height:50px;max-height:220px;outline:none}
+.go textarea:focus{border-color:var(--accent)}
+select{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.dest{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:14px;color:var(--muted)}
+.dest b{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
+.sites{margin-top:10px;font-size:12.5px;color:var(--muted)}
+.clip{display:none;margin-top:12px;padding:10px 12px;border:1px dashed var(--accent);border-radius:10px;align-items:center;gap:10px;font-size:14px}
+.clip.on{display:flex}
+.clip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg{margin-top:10px;color:var(--bad);font-size:14px;display:none}
+h2{font-size:15px;margin:26px 0 10px;display:flex;align-items:center;gap:10px}
+h2 .sp{flex:1}
+h2 small{font-weight:400;color:var(--muted)}
+.item{display:flex;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:8px;align-items:center}
+.thumb{width:96px;height:56px;border-radius:8px;background:var(--soft);object-fit:cover;flex:none}
+.body{flex:1;min-width:0}
+.title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta{font-size:12.5px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.badge{font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:20px;background:var(--soft);color:var(--ink)}
+.bar{height:6px;background:var(--soft);border-radius:4px;margin-top:7px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .5s}
+.err{color:var(--bad);font-size:13px;margin-top:4px}
+.ok{color:var(--ok)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:none}
+.empty{color:var(--muted);font-size:14px;padding:14px;border:1px dashed var(--line);border-radius:12px;text-align:center}
+.search{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px;width:180px}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);padding:20px;width:min(560px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h3{margin:0 0 14px}
+.row{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row label{flex:1}
+.row .hint{display:block;font-size:12.5px;color:var(--muted)}
+#sApp{white-space:pre-line}
+.drop{position:fixed;inset:0;background:color-mix(in srgb,var(--accent) 18%,transparent);border:3px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:22px;font-weight:700;z-index:9}
+.drop.on{display:flex}
+@media (max-width:640px){.item{flex-wrap:wrap}.acts{width:100%;justify-content:flex-start}.thumb{width:72px;height:44px}}
+</style>
+</head>
+<body>
+<div class="drop" id="drop">Drop the link to save it</div>
+<div class="wrap">
+  <header>
+    <img src="/icon.png" alt="">
+    <h1>Video Saver</h1>
+    <div class="sp"></div>
+    <button class="btn primary" id="appUpd" style="display:none" onclick="appUpdate()"></button>
+    <button class="btn" onclick="openSettings()">Settings</button>
+  </header>
+
+  <div class="card">
+    <div class="go">
+      <textarea id="links" rows="2" placeholder="Paste a link from YouTube, Instagram, TikTok, X, Facebook… (several? one per line)"></textarea>
+      <select id="quality" title="Quality"></select>
+      <button class="btn primary" id="saveBtn" onclick="saveLinks()">Save video</button>
+    </div>
+    <div class="clip" id="clip"><span>📋 Link on your clipboard: <b id="clipUrl"></b></span>
+      <button class="btn small primary" onclick="saveClip()">Save it</button>
+      <button class="btn small" onclick="hideClip()">Not now</button></div>
+    <div class="msg" id="msg"></div>
+    <div class="dest">Saves to <b id="folderName"></b>
+      <button class="btn small" onclick="chooseFolder()">Change…</button>
+      <button class="btn small" onclick="post('/api/open-folder')" id="openFolderBtn">Open in Finder</button></div>
+    <div class="sites">Works with YouTube (videos, Shorts, playlists), Instagram (Reels, posts, stories), TikTok, X / Twitter, Facebook, Threads, Reddit, Pinterest, Snapchat, Vimeo, Twitch clips, Dailymotion, Bilibili, SoundCloud and many more.</div>
+  </div>
+
+  <h2 id="nowHead" style="display:none">Saving now <span class="sp"></span><button class="btn link" id="clearBtn" onclick="post('/api/clear').then(refresh)">Clear finished</button></h2>
+  <div id="jobs"></div>
+
+  <h2>Saved <small id="count"></small><span class="sp"></span><input class="search" id="search" placeholder="Search saved…" oninput="drawHistory()"></h2>
+  <div id="history"></div>
+</div>
+
+<dialog id="settings">
+  <h3>Settings</h3>
+  <div class="row"><label>Save videos to<span class="hint" id="sFolder"></span></label>
+    <button class="btn small" onclick="chooseFolder()">Change…</button></div>
+  <div class="row"><label for="sSite">A folder per app<span class="hint">Puts videos in YouTube, Instagram, TikTok, X… folders inside your save folder.</span></label>
+    <input type="checkbox" id="sSite" onchange="setS({site_folders:this.checked})"></div>
+  <div class="row"><label for="sDate">Put the date in the name<span class="hint">Starts the file name with the day the video was posted, like "2026-11-24 My video.mp4", so your folder sorts by date. (Sites only share the day it was posted, not the day it was filmed.)</span></label>
+    <input type="checkbox" id="sDate" onchange="setS({date_in_name:this.checked})"></div>
+  <div class="row"><label for="sMac"><span id="macLabel">Make every video Mac-friendly</span><span class="hint" id="macHint">Converts to H.264 + AAC MP4 when needed, so it opens in QuickTime, iMovie, CapCut and ThumbStudio Video. 4K YouTube can take a few minutes.</span></label>
+    <input type="checkbox" id="sMac" onchange="setS({mac_friendly:this.checked})"></div>
+  <div class="row"><label for="sBrowser">Use my login from<span class="hint" id="loginHint">For posts you need to be logged in to see (Instagram stories, private or age-limited videos). Video Saver reads that browser's login on this Mac only; it never sees your password. Chrome may ask once for your Mac password: choose "Always Allow".</span></label>
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end"><select id="sBrowser" onchange="setS({browser:this.value}); $('loginResult').textContent=''"></select>
+    <button class="btn small" id="testBtn" onclick="testLogin()">Test</button></div></div>
+  <div id="loginResult" style="font-size:13px;margin:-4px 0 8px"></div>
+  <div class="row"><label for="sNotify" id="notifyLabel">Mac notification when a video is saved</label>
+    <input type="checkbox" id="sNotify" onchange="setS({notify:this.checked})"></div>
+  <div class="row"><label for="sReveal" id="revealLabel">Show the video in Finder when it's saved</label>
+    <input type="checkbox" id="sReveal" onchange="setS({reveal_when_done:this.checked})"></div>
+  <div class="row"><label>Update downloader<span class="hint" id="sUpdate">Sites change often. If a site stops working, update (it also updates by itself once a week).</span></label>
+    <button class="btn small" id="updBtn" onclick="updateDl()">Update</button></div>
+  <div class="row"><label>Video Saver version<span class="hint" id="sApp"></span></label>
+    <button class="btn small" id="appChk" onclick="checkApp()">Check for updates</button></div>
+  <div style="text-align:right;margin-top:14px"><button class="btn primary" onclick="settingsDlg.close()">Done</button></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const settingsDlg = $('settings');
+let S = {settings:{}, jobs:[], history:[], browsers:[], qualities:[]};
+let lastClip = '', dismissed = new Set();
+
+const post = (url, body) => fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})})
+  .then(r => r.json().then(j => (r.ok ? j : Promise.reject(j))));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const native = () => window.pywebview && window.pywebview.api;
+function fmtDur(s){ if(!s) return ''; s=Math.round(s); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
+  return (h? h+':'+String(m).padStart(2,'0') : m)+':'+String(x).padStart(2,'0'); }
+function fmtSize(b){ return b>1e9 ? (b/1e9).toFixed(1)+' GB' : b>1e6 ? Math.round(b/1e6)+' MB' : b ? Math.round(b/1e3)+' KB' : ''; }
+function fmtDate(t){ const d=new Date(t*1000), now=new Date();
+  return d.toDateString()===now.toDateString() ? 'Today '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString([], {day:'numeric',month:'short',year: d.getFullYear()===now.getFullYear()?undefined:'numeric'}); }
+function shortPath(p){ return (p||'').replace(/\\/g,'/').replace(/^([A-Za-z]:)?\/Users\/[^/]+/i, '~').replace('~/Downloads','Downloads').replace('~/Desktop','Desktop').replace('~/Documents','Documents').replace('~/Movies','Movies').split('/').join(' › '); }
+// the same page on Windows: File Explorer instead of Finder, and which browsers' logins can be read there
+let WIN = false, SHOW = 'Show in Finder';
+function forWindows(){
+  WIN = true; SHOW = 'Show in folder';
+  $('openFolderBtn').textContent = 'Open in File Explorer';
+  $('macLabel').textContent = 'Make every video play everywhere';
+  $('macHint').textContent = 'Converts to H.264 + AAC MP4 when needed, so it opens in the Photos app, Media Player, CapCut, Premiere and on phones. 4K YouTube can take a few minutes.';
+  $('loginHint').textContent = "For posts you need to be logged in to see (Instagram stories, private or age-limited videos). Video Saver reads that browser's login on this PC only; it never sees your password. On Windows only Firefox works: Chrome, Edge, Brave, Opera and Vivaldi lock their logins.";
+  $('notifyLabel').textContent = 'Notification when a video is saved';
+  $('revealLabel').textContent = "Show the video in File Explorer when it's saved";
+}
+function hq(h){ return h>=2000 ? '4K' : h ? h+'p' : ''; }
+
+async function refresh(){
+  try { S = await fetch('/api/state').then(r=>r.json()); } catch(e){ return; }
+  const q = $('quality');
+  if(!q.options.length){ q.innerHTML = S.qualities.map(x=>`<option value="${x.key}">${esc(x.label)}</option>`).join(''); q.value = S.settings.quality; }
+  $('folderName').textContent = shortPath(S.settings.folder);
+  if(S.platform==='windows' && !WIN) forWindows();
+  drawJobs(); drawHistory();
+  if(settingsDlg.open) drawSettings();
+}
+
+function drawJobs(){
+  $('nowHead').style.display = S.jobs.length ? '' : 'none';
+  $('clearBtn').style.display = S.jobs.some(j=>['done','error','cancelled'].includes(j.status)) ? '' : 'none';
+  $('jobs').innerHTML = S.jobs.map(j => {
+    const p = j.paths && j.paths[0];
+    const acts = j.status==='done'
+      ? `<button class="btn small primary" data-p="${esc(p)}" onclick="reveal(this.dataset.p)">${SHOW}</button><button class="btn small" data-p="${esc(p)}" onclick="openFile(this.dataset.p)">Open</button>`
+      : j.status==='error' || j.status==='cancelled'
+      ? `<button class="btn small" onclick="post('/api/retry/${j.id}').then(refresh)">Try again</button>`
+      : `<button class="btn small" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`;
+    const state = j.status==='done' ? `<span class="ok">✓ Saved${j.paths.length>1?' '+j.paths.length+' videos':''}${j.height?' · '+hq(j.height):''}${j.detail?' · '+esc(j.detail):''}</span>`
+      : j.status==='cancelled' ? 'Stopped' : esc(j.detail);
+    return `<div class="item">
+      ${j.thumbnail ? `<img class="thumb" src="${esc(j.thumbnail)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
+      <div class="body"><div class="title">${esc(j.title || j.url)}</div>
+        <div class="meta"><span class="badge">${esc(j.site)}</span><span>${esc(j.quality_label)}</span>${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}<span>${state}</span></div>
+        ${j.status==='working'||j.status==='waiting' ? `<div class="bar"><i style="width:${j.progress}%"></i></div>` : ''}
+        ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}</div>
+      <div class="acts">${acts}</div></div>`;
+  }).join('');
+}
+
+function drawHistory(){
+  const q = $('search').value.trim().toLowerCase();
+  const items = S.history.filter(h => !q || (h.title+' '+h.site+' '+(h.uploader||'')).toLowerCase().includes(q));
+  $('count').textContent = S.history.length ? S.history.length : '';
+  if(!S.history.length){ $('history').innerHTML = `<div class="empty">Videos you save show up here. Copy a link in any app (Share → Copy link), then paste it above.</div>`; return; }
+  if(!items.length){ $('history').innerHTML = `<div class="empty">Nothing matches “${esc(q)}”.</div>`; return; }
+  $('history').innerHTML = items.slice(0,200).map(h => {
+    const f = h.files[0] || {}, gone = !h.files.some(x=>x.exists);
+    const size = h.files.reduce((a,x)=>a+(x.size||0),0);
+    return `<div class="item">
+      ${h.thumbnail ? `<img class="thumb" src="${esc(h.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
+      <div class="body"><div class="title" title="${esc(f.path)}">${esc(h.title)}</div>
+        <div class="meta"><span class="badge">${esc(h.site)}</span>${h.height?`<span>${hq(h.height)}</span>`:h.quality.startsWith('Audio')?'<span>MP3</span>':''}${h.duration?`<span>${fmtDur(h.duration)}</span>`:''}${size?`<span>${fmtSize(size)}</span>`:''}${h.files.length>1?`<span>${h.files.length} videos</span>`:''}<span>${fmtDate(h.saved)}</span>
+        ${gone?'<span class="err" style="margin:0">File moved or deleted</span>':''}</div></div>
+      <div class="acts">${gone ? `<button class="btn small" data-p="${esc(h.url)}" onclick="saveAgain(this.dataset.p)">Save again</button>` :
+        `<button class="btn small" data-p="${esc(f.path)}" onclick="reveal(this.dataset.p)">${SHOW}</button><button class="btn small" data-p="${esc(f.path)}" onclick="openFile(this.dataset.p)">Open</button>`}
+        <button class="btn small" title="Remove from this list (the file stays in its folder)" onclick="post('/api/history/remove/${h.id}').then(refresh)">✕</button></div></div>`;
+  }).join('');
+}
+
+function showMsg(t){ const m=$('msg'); m.textContent=t||''; m.style.display=t?'block':'none'; }
+async function addText(text){
+  showMsg('');
+  try { await post('/api/add', {text, quality: $('quality').value}); return true; }
+  catch(e){ showMsg(e.error || 'Something went wrong.'); return false; }
+  finally { refresh(); }
+}
+async function saveLinks(){ const t=$('links').value; if(await addText(t)) $('links').value=''; }
+function saveAgain(url){ addText(url); }
+$('links').addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); saveLinks(); } });
+$('quality').addEventListener('change', e => setS({quality:e.target.value}));
+
+function reveal(path){ post('/api/reveal', {path}); }
+function openFile(path){ post('/api/open', {path}); }
+async function setS(c){ S.settings = await post('/api/settings', c); $('folderName').textContent = shortPath(S.settings.folder); if(settingsDlg.open) drawSettings(); }
+async function chooseFolder(){
+  if(!native()){ const f = prompt('Folder to save videos to:', S.settings.folder); if(f) setS({folder:f}); return; }
+  const f = await native().pick_folder(); if(f) setS({folder:f});
+}
+
+function openSettings(){ drawSettings(); drawApp(); settingsDlg.showModal(); }
+function drawSettings(){
+  const s = S.settings;
+  $('sFolder').textContent = shortPath(s.folder);
+  $('sSite').checked = !!s.site_folders; $('sMac').checked = !!s.mac_friendly; $('sDate').checked = !!s.date_in_name;
+  $('sNotify').checked = !!s.notify; $('sReveal').checked = !!s.reveal_when_done;
+  $('sBrowser').innerHTML = `<option value="">Nobody (not logged in)</option>` + S.browsers.map(b=>`<option value="${b.key}">${esc(b.name)}${b.works===false?' (locked on Windows)':''}</option>`).join('');
+  $('sBrowser').value = s.browser || '';
+  const u = S.update || {};
+  $('sUpdate').textContent = u.detail || `Sites change often. If a site stops working, update (it also updates by itself once a week). Now: ${S.version}.`;
+  $('updBtn').disabled = u.state === 'working';
+}
+async function testLogin(){
+  const r=$('loginResult'), b=$('testBtn'); b.disabled=true;
+  r.style.color='var(--muted)'; r.textContent = WIN ? 'Reading your login…' : 'Reading your login… (if the Mac asks for your password, click Always Allow)';
+  try { const x = await post('/api/test-login'); r.style.color = x.ok && x.sites && x.sites.length ? 'var(--ok)' : 'var(--bad)'; r.textContent = (x.ok && x.sites && x.sites.length ? '✓ ' : '') + x.message; }
+  catch(e){ r.style.color='var(--bad)'; r.textContent = (e && e.message) || 'Something went wrong.'; }
+  b.disabled=false;
+}
+// Video Saver's own updates: ✨ Update → it downloads → Restart now (settings and saved list are kept)
+let U = {};
+async function refreshApp(){
+  try { U = await fetch('/api/app-update').then(r=>r.json()); } catch(e){ return; }
+  const b = $('appUpd'), st = U.state;
+  const show = U.can_install && ['available','downloading','ready','restarting'].includes(st);
+  b.style.display = show ? '' : 'none';
+  b.disabled = st==='downloading' || st==='restarting';
+  b.textContent = st==='available' ? `✨ Update to ${U.latest}` : st==='downloading' ? `Downloading… ${U.progress||0}%`
+    : st==='ready' ? 'Restart now' : 'Restarting…';
+  b.title = U.notes ? "What's new:\n" + U.notes : '';
+  if(settingsDlg.open) drawApp();
+}
+function drawApp(){
+  $('sApp').textContent = `Version ${U.current||''}. ` + (U.detail || 'Updates show up as ✨ Update at the top.')
+    + (U.can_install===false && U.state==='available' ? ' (This copy runs from source: update it with installer/install.sh.)' : '')
+    + (U.notes && ['available','ready'].includes(U.state) ? `\nWhat's new: ${U.notes}` : '');
+  $('appChk').disabled = ['downloading','restarting'].includes(U.state);
+}
+async function checkApp(){ $('sApp').textContent='Checking…'; await post('/api/app-update/check'); refreshApp(); }
+async function appUpdate(){
+  if(U.state==='available'){ await post('/api/app-update/install'); return refreshApp(); }
+  if(U.state==='ready'){
+    const n = S.jobs.filter(j=>j.status==='working'||j.status==='waiting').length;
+    if(n && !confirm(`Video Saver is still saving ${n} video${n>1?'s':''}. Restart anyway? (Press Try again on them afterwards.)`)) return;
+    await post('/api/app-update/restart'); refreshApp();
+  }
+}
+async function updateDl(){ await post('/api/update-downloader'); refresh(); }
+
+// a link copied in another app shows up as "Save it" when you come back to Video Saver
+async function checkClipboard(){
+  if(!native()) return;
+  let t = ''; try { t = await native().clipboard(); } catch(e){ return; }
+  if(!t || t===lastClip) return;
+  lastClip = t;
+  const {links} = await post('/api/links', {text:t});
+  const known = new Set([...S.jobs.map(j=>j.url), ...S.history.map(h=>h.url)]);
+  const fresh = links.filter(u => !known.has(u) && !dismissed.has(u));
+  if(!fresh.length) return hideClip(true);
+  $('clipUrl').textContent = fresh.length>1 ? fresh.length+' links' : fresh[0].replace(/^https?:\/\/(www\.)?/,'');
+  $('clip').dataset.links = fresh.join('\n'); $('clip').classList.add('on');
+}
+function saveClip(){ addText($('clip').dataset.links); hideClip(true); }
+function hideClip(quiet){ (($('clip').dataset.links)||'').split('\n').forEach(u=>u&&dismissed.add(u)); $('clip').classList.remove('on'); }
+window.addEventListener('focus', checkClipboard);
+window.addEventListener('pywebviewready', checkClipboard);
+
+// drag a link (from a browser's address bar or a page) onto the window
+let dragN = 0;
+addEventListener('dragenter', e => { if([...e.dataTransfer.types].some(t=>t.startsWith('text'))){ dragN++; $('drop').classList.add('on'); } });
+addEventListener('dragleave', () => { if(--dragN<=0){ dragN=0; $('drop').classList.remove('on'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); dragN=0; $('drop').classList.remove('on');
+  const t = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'); if(t) addText(t); });
+
+refresh(); refreshApp();
+(function loop(){ const active = S.jobs.some(j=>j.status==='working'||j.status==='waiting') || (S.update||{}).state==='working';
+  setTimeout(()=>refresh().then(loop), active ? 900 : 4000); })();
+(function appLoop(){ setTimeout(()=>refreshApp().then(appLoop), U.state==='downloading' ? 700 : 5000); })();
+</script>
+</body>
+</html>

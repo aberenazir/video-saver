@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+out/
+installer/bin/
+*.dmg
+*.exe
+.DS_Store

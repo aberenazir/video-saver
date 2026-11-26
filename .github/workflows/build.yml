@@ -1,0 +1,99 @@
+# Builds the installable Video Saver on GitHub's computers (a Mac can't build a Windows .exe itself):
+#   Windows: "Video Saver Setup.exe" (installer) and "Video Saver (portable).zip"
+#   Mac:     "Video Saver.dmg" for Apple Silicon and for Intel Macs
+# Runs when you press "Run workflow" on the repository's Actions page, or when a tag like v2.0 is pushed
+# (then the files are also attached to a GitHub Release). Download them from the run's "Artifacts".
+name: Build Video Saver
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r installer/requirements.txt pyinstaller
+
+      - name: Get Deno (the JavaScript runtime YouTube needs)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile deno.zip
+          Expand-Archive deno.zip -DestinationPath installer/bin -Force
+          installer/bin/deno.exe --version
+          "DENO=$PWD\installer\bin\deno.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Test the Windows parts of the engine
+        run: python installer/windows/smoke_test.py
+
+      - name: Build Video Saver.exe
+        run: pyinstaller --noconfirm --distpath dist --workpath build installer/VideoSaver.spec
+
+      - name: Test the built app
+        run: python installer/windows/smoke_test.py "dist/Video Saver/Video Saver.exe"
+
+      - name: Make the Setup .exe and the portable zip
+        shell: pwsh
+        run: |
+          $v = (Get-Content installer/VERSION).Trim()
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$v" installer\windows\VideoSaver.iss
+          Compress-Archive -Path "dist/Video Saver" -DestinationPath "dist/Video Saver (portable).zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Video Saver for Windows
+          path: |
+            dist/Video Saver Setup.exe
+            dist/Video Saver (portable).zip
+
+      - name: Attach to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Video Saver Setup.exe
+            dist/Video Saver (portable).zip
+
+  mac:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest       # Apple Silicon (M1 and newer)
+            label: Apple Silicon
+          - runner: macos-15-intel     # Intel Macs
+            label: Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build the .dmg
+        run: |
+          bash installer/build_mac.sh "$PWD/out"
+          mv "out/Video Saver.dmg" "out/Video Saver (${{ matrix.label }}).dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Video Saver for Mac (${{ matrix.label }})
+          path: out/*.dmg
+      - name: Attach to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.dmg
