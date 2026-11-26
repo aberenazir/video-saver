@@ -1,6 +1,17 @@
 #!/bin/bash
-# Installs or updates "Video Saver.app" in /Applications from this folder.
-# Your saved list and settings (~/Library/Application Support/Video Saver) are never touched.
+# !! NOT THE INSTALLER ANY MORE (since 26 Nov 2026) !!
+# Video Saver is now installed from Install/Mac/Video Saver.dmg, built by installer/build_mac.sh.
+# This old script builds the previous kind of app (a launcher that needs a Python setup on this Mac) and would
+# REPLACE the self-contained app in /Applications. It only runs with --old-python-version, for development.
+#
+# (Old description: installs or updates "Video Saver.app" in /Applications from this folder.
+# Your saved list and settings (~/Library/Application Support/Video Saver) are never touched.)
+if [ "${1:-}" != "--old-python-version" ]; then
+  echo "This is not the Video Saver installer any more."
+  echo "To install: open Install/Mac/Video Saver.dmg and drag Video Saver into Applications."
+  echo "To rebuild that .dmg: bash installer/build_mac.sh"
+  exit 1
+fi
 set -e
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 A="/Applications/Video Saver.app"

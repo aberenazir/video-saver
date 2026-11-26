@@ -81,7 +81,7 @@ shows.) `VIDEO_SAVER_RELEASES=<url>` points the check at a test file instead of 
 - `installer/VideoSaver.spec`: the PyInstaller recipe (Mac and Windows); `installer/requirements.txt`: what it bundles
 - `installer/windows/`: the Windows installer recipe (Inno Setup), version info and a Windows self-test
 - `.github/workflows/build.yml`: builds Windows (Setup .exe + portable zip) and Mac (Apple Silicon + Intel) on GitHub
-- `installer/install.sh`: the older way: builds the app in /Applications from source with a Python setup (this Mac only)
+- `installer/install.sh`: **not the installer any more**: the old way (an app that needs a Python setup on this Mac). It refuses to run unless given `--old-python-version`, because it would replace the self-contained app
 - `installer/make_icon.py`: draws the icon
 
 Settings and the saved list live in `~/Library/Application Support/Video Saver` (Windows: `%APPDATA%\Video Saver`), kept when you reinstall.

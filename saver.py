@@ -94,7 +94,8 @@ DEFAULTS = {
 }
 
 QUALITIES = {  # key: (label, max height or 0 for audio)
-    "best": ("Best quality", 100000),
+    "best": ("Best quality", 100000),  # the sharpest the site has (8K, 4K, …)
+    "2160": ("4K", 2160),
     "1080": ("1080p", 1080),
     "720": ("720p", 720),
     "480": ("480p (small)", 480),
