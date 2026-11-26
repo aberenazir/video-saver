@@ -57,6 +57,15 @@ To publish a new version: change the number in `installer/VERSION`, then push a 
 installed copy then offers the update. (Until the repository and a first release exist, the button simply never
 shows.) `VIDEO_SAVER_RELEASES=<url>` points the check at a test file instead of GitHub (only for testing).
 
+### Signing (so macOS remembers Full Disk Access)
+
+`build_mac.sh` signs the app with the "Video Saver Local Signing" certificate in this Mac's login Keychain (self-made,
+valid to 2046, no Apple account). macOS ties Full Disk Access to that certificate, so it survives rebuilds and
+updates; without it (or on GitHub's computers) the app gets an ad-hoc signature and macOS asks again after every
+new build. So build Mac releases on this Mac (`bash installer/build_mac.sh`) and attach that .dmg to the GitHub
+Release, rather than using the GitHub-built Mac .dmg. Back up the certificate (Keychain Access → export) if you want
+to build on another Mac with the same identity.
+
 ### What differs on Windows
 
 | Mac | Windows |

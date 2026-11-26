@@ -47,7 +47,13 @@ rm -rf "$WORK/dist" "$WORK/build"
   installer/VideoSaver.spec
 APP="$WORK/dist/Video Saver.app"
 xattr -cr "$APP"
-codesign --force --deep --sign - "$APP"   # ad-hoc signature (no Apple Developer account)
+# Signature: with the "Video Saver Local Signing" certificate when this Mac has it (made once, kept in the login
+# Keychain). Then every build counts as the same app, so macOS keeps Full Disk Access across rebuilds and updates.
+# Without it: an ad-hoc signature (macOS asks for Full Disk Access again after each new build).
+SIGN="${SIGN_IDENTITY:-Video Saver Local Signing}"
+security find-certificate -c "$SIGN" >/dev/null 2>&1 || SIGN="-"
+codesign --force --deep --sign "$SIGN" "$APP"
+echo "   signed with: $SIGN"
 
 echo "4/5 Checking the app has everything"
 [ -x "$APP/Contents/Frameworks/bin/deno" ] || [ -x "$APP/Contents/Frameworks/bin/node" ] || { echo "!! JavaScript runtime missing"; exit 1; }
