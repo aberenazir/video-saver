@@ -240,6 +240,120 @@ def safe_name(name, limit=90):
 # file name could already belong to ANOTHER video. Then the downloader would skip the new one ("already there")
 # and the app would show the old file. Each saved file is recorded with which video it is; a different video
 # with the same name gets " (2)", " (3)"…
+# ---------------------------------------------------------------- add the date to videos saved before
+DATED = re.compile(r"^\d{4}-\d{2}-\d{2} ")
+RENAME_HOOKS = []   # f(old path, new path), e.g. Link Transcriber keeps its transcripts pointing at the renamed file
+DATING = {"state": "", "done": 0, "total": 0, "renamed": 0, "detail": ""}
+_dating_lock = threading.Lock()
+
+
+def _day_of(info):
+    """The day a video was posted, as "2026-11-24", or "" if the site doesn't say."""
+    day = str(info.get("upload_date") or info.get("release_date") or "")
+    if not re.fullmatch(r"\d{8}", day) and info.get("timestamp"):
+        day = time.strftime("%Y%m%d", time.localtime(info["timestamp"]))
+    return f"{day[:4]}-{day[4:6]}-{day[6:]}" if re.fullmatch(r"\d{8}", day) else ""
+
+
+class _Quiet:
+    def debug(self, m): pass
+    warning = error = info = debug
+
+
+def _lookup_day(url, s):
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 20,
+            "js_runtimes": JS_RUNTIMES, "ffmpeg_location": FFMPEG, "logger": _Quiet()}
+    if s["browser"]:
+        prof = login_profile(s["browser"], site_of(url))
+        opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False, process=False) or {}
+        day = _day_of(info)
+        if not day and info.get("_type") in ("url", "url_transparent"):  # a short link: follow it
+            day = _day_of(ydl.extract_info(info["url"], download=False, process=False) or {})
+    return day
+
+
+def _undated(h):
+    return [p for p in h.get("paths", []) if os.path.exists(p) and not DATED.match(os.path.basename(p))]
+
+
+def dating_status():
+    todo = sum(1 for h in load_history() if _undated(h))
+    return dict(DATING, todo=todo)
+
+
+def add_dates():
+    """Starts the posting day at the front of every saved video's name that doesn't have one yet (in the background)."""
+    with _dating_lock:
+        if DATING["state"] == "working":
+            return dating_status()
+        if busy():
+            DATING.update(state="error", detail="Wait until the videos saving now are done, then try again.")
+            return dating_status()
+        DATING.update(state="working", done=0, total=0, renamed=0, detail="Looking up the dates…")
+    threading.Thread(target=_date_all, daemon=True).start()
+    return dating_status()
+
+
+def _date_all():
+    s = load_settings()
+    todo = [h for h in load_history() if _undated(h)]
+    DATING["total"] = len(todo)
+    missing = 0
+    for k, h in enumerate(todo):
+        DATING["detail"] = f"Adding dates… {k + 1} of {len(todo)}"
+        try:
+            day = h.get("posted") or _lookup_day(h["url"], s)
+        except Exception:
+            day = ""
+        if not day:
+            missing += 1
+        else:
+            moved = {}
+            for p in _undated(h):
+                folder, name = os.path.split(p)
+                new = os.path.join(folder, f"{day} {name}")
+                stem, ext = os.path.splitext(new)
+                n = 2
+                while os.path.exists(new):
+                    new = f"{stem} ({n}){ext}"
+                    n += 1
+                try:
+                    os.rename(p, new)
+                    moved[p] = new
+                except OSError:
+                    missing += 1
+            _moved(h["id"], day, moved)
+            DATING["renamed"] += len(moved)
+        DATING["done"] = k + 1
+    n = DATING["renamed"]
+    DATING.update(state="done", detail=(f"Added the date to {n} video{'s' if n != 1 else ''}." if n else "No names to change.")
+                  + (f" {missing} couldn't get a date (the post is gone, private, or the site doesn't say)." if missing else ""))
+
+
+def _moved(hid, day, moved):
+    """Keeps the saved list, the file index and Link Transcriber pointing at the new names."""
+    with _lock:
+        items = load_history()
+        for h in items:
+            if h.get("id") == hid:
+                h["posted"] = day
+            h["paths"] = [moved.get(p, p) for p in h.get("paths", [])]
+        _save_history(items)
+    with _names_lock:
+        idx = {moved.get(k, k): v for k, v in _load_files().items()}
+        with open(FILES_FILE + ".tmp", "w") as f:
+            json.dump(idx, f, ensure_ascii=False)
+        os.replace(FILES_FILE + ".tmp", FILES_FILE)
+    for old, new in moved.items():
+        for hook in RENAME_HOOKS:
+            try:
+                hook(old, new)
+            except Exception:
+                pass
+
+
 FILES_FILE = os.path.join(DATA, "files.json")
 _names_lock = threading.Lock()
 _reserved = set()   # names being saved right now by other downloads
@@ -358,12 +472,10 @@ class _UniqueName(yt_dlp.postprocessor.PostProcessor):
     def run(self, info):
         info["title"] = _better_title(info)
         base = info["title"]
-        # the day it was posted (sites keep only that, not the day it was filmed), when the setting is on
-        day = str(info.get("upload_date") or info.get("release_date") or "")
-        if not re.fullmatch(r"\d{8}", day) and info.get("timestamp"):
-            day = time.strftime("%Y%m%d", time.localtime(info["timestamp"]))
-        info["saver_date"] = (f"{day[:4]}-{day[4:6]}-{day[6:]} "
-                              if self.job.get("date_in_name") and re.fullmatch(r"\d{8}", day) else "")
+        # the day it was posted (sites keep only that, not the day it was filmed): at the start of the name when
+        # the setting is on, and kept in the saved list either way (so "Add dates" needs no lookup later)
+        self.job["posted"] = _day_of(info)
+        info["saver_date"] = self.job["posted"] + " " if self.job.get("date_in_name") and self.job["posted"] else ""
         vid, url = _vid(info), _norm_url(info.get("webpage_url") or info.get("original_url"))
         with _names_lock:
             n = 1
@@ -501,7 +613,7 @@ def add(links, quality=None):
         jid = uuid.uuid4().hex[:10]
         job = {"id": jid, "url": url, "site": site_of(url), "quality": quality, "quality_label": QUALITIES[quality][0],
                "status": "waiting", "detail": "Waiting…", "progress": 0, "title": "", "thumbnail": "", "uploader": "",
-               "duration": 0, "count": 1, "index": 1, "paths": [], "error": "", "added": time.time(),
+               "duration": 0, "count": 1, "index": 1, "paths": [], "error": "", "added": time.time(), "size": 0, "got": 0,
                "_cancel": False}
         JOBS[jid] = job
         threading.Thread(target=_run, args=(job,), daemon=True).start()
@@ -563,6 +675,25 @@ def _friendly_error(e, job, browser):
     return msg[:400] + "  (If a site stopped working, press Settings → Update downloader.)"
 
 
+def nice_size(b):
+    return f"{b / 1e9:.1f} GB" if b >= 1e9 else f"{round(b / 1e6)} MB" if b >= 1e6 else f"{round(b / 1e3)} KB" if b else ""
+
+
+def _count_size(job, info, d):
+    """How big the whole download is (video + sound, every video of a list) and how much has come in so far.
+    Before a part starts, the site's own size for it is used, so the total is known from the first second."""
+    parts = job.setdefault("_parts", {})
+    i = job["index"]
+    tot = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+    got = d.get("downloaded_bytes") or (tot if d.get("status") == "finished" else 0)
+    parts[(i, info.get("format_id") or d.get("filename") or "")] = (got, max(tot, got))
+    fmts = info.get("requested_formats") or [info]
+    waiting = sum((f.get("filesize") or f.get("filesize_approx") or 0) for f in fmts
+                  if (i, f.get("format_id")) not in parts)  # the sound part, before it starts
+    job["size"] = sum(t for _, t in parts.values()) + waiting
+    job["got"] = min(job["size"], sum(g for g, _ in parts.values()))
+
+
 def _run(job):
     with _SLOTS:
         if job["_cancel"]:
@@ -590,6 +721,8 @@ def _run(job):
             n, i = info.get("n_entries") or info.get("playlist_count"), info.get("playlist_index")
             if n and i:
                 job.update(count=n, index=i)
+            if d.get("status") in ("downloading", "finished"):
+                _count_size(job, info, d)
             if d.get("status") == "downloading":
                 tot = d.get("total_bytes") or d.get("total_bytes_estimate")
                 part = d.get("downloaded_bytes", 0) / tot if tot else 0
@@ -598,7 +731,8 @@ def _run(job):
                 sp, eta = d.get("speed"), d.get("eta")
                 extra = (f" · {sp / 1e6:.1f} MB/s" if sp else "") + (f" · {int(eta)} s left" if eta else "")
                 many = f" ({job['index']} of {job['count']})" if job["count"] > 1 else ""
-                job["detail"] = f"Downloading{many}{extra}"
+                of = f" · {nice_size(job['got'])} of {nice_size(job['size'])}" if job.get("size") else ""
+                job["detail"] = f"Downloading{many}{of}{extra}"
             elif d.get("status") == "finished":
                 job["detail"] = "Putting video and sound together…" if height else "Making the MP3…"
 
@@ -676,6 +810,7 @@ def _run(job):
                 job["upgraded"] = f"Replaced your earlier {up['from']}p copy with {up['to']}p (the old one is in the Trash)"
             vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
             remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
+            job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
             job.update(status="done", progress=100, paths=final,
                        detail=job.get("upgraded") or ("Already in your folder (saved before)" if job.get("already") else ""))
             _, got, _, dur = media_info(final[0])
@@ -683,7 +818,8 @@ def _run(job):
             add_history({"id": job["id"], "url": job["url"], "site": job["site"], "title": job["title"] or
                          os.path.splitext(os.path.basename(final[0]))[0], "uploader": job["uploader"],
                          "thumbnail": job["thumbnail"], "quality": label, "height": got,
-                         "duration": job["duration"] or dur, "paths": final, "saved": time.time()})
+                         "duration": job["duration"] or dur, "paths": final, "saved": time.time(),
+                         "posted": job.get("posted", "")})
             if s["notify"]:
                 notify(f"Saved to {os.path.basename(folder)}", job["title"] or os.path.basename(final[0]))
             if s["reveal_when_done"]:

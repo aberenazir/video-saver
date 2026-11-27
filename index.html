@@ -110,6 +110,8 @@ dialog h3{margin:0 0 14px}
     <input type="checkbox" id="sSite" onchange="setS({site_folders:this.checked})"></div>
   <div class="row"><label for="sDate">Put the date in the name<span class="hint">Starts the file name with the day the video was posted, like "2026-11-24 My video.mp4", so your folder sorts by date. (Sites only share the day it was posted, not the day it was filmed.)</span></label>
     <input type="checkbox" id="sDate" onchange="setS({date_in_name:this.checked})"></div>
+  <div class="row"><label>Add dates to videos I saved before<span class="hint" id="datingTxt"></span></label>
+    <button class="btn small" id="datingBtn" onclick="addDates()">Add dates</button></div>
   <div class="row"><label for="sMac"><span id="macLabel">Make every video Mac-friendly</span><span class="hint" id="macHint">Converts to H.264 + AAC MP4 when needed, so it opens in QuickTime, iMovie, CapCut and ThumbStudio Video. 4K YouTube can take a few minutes.</span></label>
     <input type="checkbox" id="sMac" onchange="setS({mac_friendly:this.checked})"></div>
   <div class="row"><label for="sBrowser">Use my login from<span class="hint" id="loginHint">For posts you need to be logged in to see (Instagram stories, private or age-limited videos). Video Saver reads that browser's login on this Mac only; it never sees your password. Chrome may ask once for your Mac password: choose "Always Allow".</span></label>
@@ -181,7 +183,7 @@ function drawJobs(){
     return `<div class="item">
       ${j.thumbnail ? `<img class="thumb" src="${esc(j.thumbnail)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
       <div class="body"><div class="title">${esc(j.title || j.url)}</div>
-        <div class="meta"><span class="badge">${esc(j.site)}</span><span>${esc(j.quality_label)}</span>${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}<span>${state}</span></div>
+        <div class="meta"><span class="badge">${esc(j.site)}</span><span>${esc(j.quality_label)}</span>${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="How big the file is">${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
         ${j.status==='working'||j.status==='waiting' ? `<div class="bar"><i style="width:${j.progress}%"></i></div>` : ''}
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}</div>
       <div class="acts">${acts}</div></div>`;
@@ -234,6 +236,10 @@ function drawSettings(){
   $('sFolder').textContent = shortPath(s.folder);
   $('sSite').checked = !!s.site_folders; $('sMac').checked = !!s.mac_friendly; $('sDate').checked = !!s.date_in_name;
   $('sNotify').checked = !!s.notify; $('sReveal').checked = !!s.reveal_when_done;
+  const d = S.dating || {};
+  $('datingTxt').textContent = d.state==='working' ? d.detail
+    : (d.state ? d.detail + ' ' : '') + (d.todo ? `${d.todo} saved video${d.todo>1?'s':''} without a date in the name. Puts the posted date in front, like "2026-11-24 My video.mp4".` : (d.state ? '' : 'Every saved video already has its date.'));
+  $('datingBtn').disabled = d.state==='working' || !d.todo;
   $('sBrowser').innerHTML = `<option value="">Nobody (not logged in)</option>` + S.browsers.map(b=>`<option value="${b.key}">${esc(b.name)}${b.works===false?' (locked on Windows)':''}</option>`).join('');
   $('sBrowser').value = s.browser || '';
   const u = S.update || {};
@@ -275,6 +281,7 @@ async function appUpdate(){
     await post('/api/app-update/restart'); refreshApp();
   }
 }
+async function addDates(){ await post('/api/add-dates'); refresh(); }
 async function updateDl(){ await post('/api/update-downloader'); refresh(); }
 
 // a link copied in another app shows up as "Save it" when you come back to Video Saver

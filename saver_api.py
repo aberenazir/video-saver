@@ -15,7 +15,7 @@ def state():
     return {"settings": saver.load_settings(), "jobs": jobs, "history": saver.history_with_status(),
             "browsers": saver.installed_browsers(), "update": saver._update,
             "qualities": [{"key": k, "label": v[0]} for k, v in saver.QUALITIES.items()],
-            "version": saver.yt_dlp.version.__version__, "platform": "windows" if saver.WINDOWS else "mac"}
+            "dating": saver.dating_status(), "version": saver.yt_dlp.version.__version__, "platform": "windows" if saver.WINDOWS else "mac"}
 
 
 @router.get("/busy")
@@ -94,3 +94,8 @@ def update_downloader():
 @router.post("/test-login")
 def test_login():
     return saver.test_login(saver.load_settings()["browser"])
+
+
+@router.post("/add-dates")
+def add_dates():
+    return saver.add_dates()
