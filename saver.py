@@ -115,7 +115,10 @@ FAST_SORT = "+codec:avc:m4a"
 _CONVERT_LOCK = threading.Semaphore(1)   # the Mac has one hardware video encoder: one conversion at a time
 _SLOTS = threading.Semaphore(3)          # up to 3 downloads at the same time
 
-JOBS = {}          # id -> job (this session)
+JOBS = {}          # id -> job (this session, plus paused / unfinished ones from last time: see restore_queue)
+PARTIAL = os.path.join(DATA, "partial")        # half-downloaded pieces, one folder per save (so Pause can resume)
+QUEUE_FILE = os.path.join(DATA, "queue.json")  # paused and unfinished saves, kept across quitting / restarting
+PAUSED_TEXT = "Paused · press Resume to carry on from here"
 _lock = threading.Lock()
 
 
@@ -602,37 +605,74 @@ def public(job):
     return {k: v for k, v in job.items() if not k.startswith("_")}
 
 
+def _new_job(url, quality, jid=None, **keep):
+    quality = quality if quality in QUALITIES else load_settings()["quality"]
+    job = {"id": jid or uuid.uuid4().hex[:10], "url": url, "site": site_of(url), "quality": quality,
+           "quality_label": QUALITIES[quality][0], "status": "waiting", "detail": "Waiting…", "progress": 0, "title": "",
+           "thumbnail": "", "uploader": "", "duration": 0, "count": 1, "index": 1, "paths": [], "error": "",
+           "added": time.time(), "size": 0, "got": 0, "pending": [], "vids": [], "_cancel": False, "_pause": False}
+    job.update({k: v for k, v in keep.items() if k in job and v is not None and k not in ("id", "url", "quality")})
+    return job
+
+
+def _start(job):
+    JOBS[job["id"]] = job
+    _save_queue()
+    threading.Thread(target=_run, args=(job,), daemon=True).start()
+
+
 def add(links, quality=None):
-    s = load_settings()
-    quality = quality if quality in QUALITIES else s["quality"]
     made = []
     for url in links:
-        busy = [j for j in JOBS.values() if j["url"] == url and j["status"] in ("waiting", "working")]
-        if busy:
+        same = [j for j in JOBS.values() if j["url"] == url and j["status"] in ("waiting", "working", "paused")]
+        if same:  # already saving it, or paused: pasting it again carries on
+            if same[0]["status"] == "paused":
+                resume(same[0]["id"])
+                made.append(same[0]["id"])
             continue
-        jid = uuid.uuid4().hex[:10]
-        job = {"id": jid, "url": url, "site": site_of(url), "quality": quality, "quality_label": QUALITIES[quality][0],
-               "status": "waiting", "detail": "Waiting…", "progress": 0, "title": "", "thumbnail": "", "uploader": "",
-               "duration": 0, "count": 1, "index": 1, "paths": [], "error": "", "added": time.time(), "size": 0, "got": 0,
-               "_cancel": False}
-        JOBS[jid] = job
-        threading.Thread(target=_run, args=(job,), daemon=True).start()
-        made.append(jid)
+        job = _new_job(url, quality)
+        _start(job)
+        made.append(job["id"])
     return made
+
+
+def pause(jid):
+    """Stops the download but keeps what came in so far; Resume carries on from there."""
+    j = JOBS.get(jid)
+    if j and j["status"] in ("waiting", "working"):
+        j["_pause"] = j["_cancel"] = True
+        j["detail"] = "Pausing…"
+
+
+def resume(jid):
+    j = JOBS.get(jid)
+    if not j or j["status"] != "paused":
+        return False
+    fresh = _new_job(j["url"], j["quality"], jid=jid, **{k: j.get(k) for k in _QUEUE_KEYS})
+    _start(fresh)
+    return True
 
 
 def cancel(jid):
     j = JOBS.get(jid)
-    if j and j["status"] in ("waiting", "working"):
-        j["_cancel"] = True
+    if not j:
+        return
+    if j["status"] == "paused":  # Stop on a paused save: forget it and its half-downloaded pieces
+        JOBS.pop(jid, None)
+        _drop_partial(jid)
+        _save_queue()
+    elif j["status"] in ("waiting", "working"):
+        j["_pause"], j["_cancel"] = False, True
         j["detail"] = "Stopping…"
 
 
 def retry(jid):
-    j = JOBS.pop(jid, None)
-    if j:
-        return add([j["url"]], j["quality"])
-    return []
+    """Try again on the same save (and the same temp folder), so a failed download carries on where it stopped."""
+    j = JOBS.get(jid)
+    if not j or j["status"] in ("waiting", "working"):
+        return []
+    _start(_new_job(j["url"], j["quality"], jid=jid, title=j.get("title"), thumbnail=j.get("thumbnail")))
+    return [jid]
 
 
 def clear_finished():
@@ -641,7 +681,65 @@ def clear_finished():
 
 
 def busy():
+    """Saves still running (a paused one doesn't count: it doesn't hold anything up)."""
     return [j["title"] or j["url"] for j in JOBS.values() if j["status"] in ("waiting", "working")]
+
+
+# ---------------------------------------------------------------- paused / unfinished saves survive a restart
+_QUEUE_KEYS = ("title", "thumbnail", "site", "uploader", "duration", "added", "size", "got", "progress", "pending",
+               "vids", "count", "index")
+_queue_lock = threading.Lock()
+_restored = False
+
+
+def _save_queue():
+    with _queue_lock:
+        items = [dict({k: j.get(k) for k in ("id", "url", "quality") + _QUEUE_KEYS}, paused=j["status"] == "paused")
+                 for j in list(JOBS.values()) if j["status"] in ("waiting", "working", "paused")]
+        try:
+            with open(QUEUE_FILE + ".tmp", "w") as f:
+                json.dump(items, f, ensure_ascii=False)
+            os.replace(QUEUE_FILE + ".tmp", QUEUE_FILE)
+        except OSError:
+            pass
+
+
+def _drop_partial(jid):
+    shutil.rmtree(os.path.join(PARTIAL, jid), ignore_errors=True)
+
+
+def restore_queue():
+    """At start: paused saves come back paused, unfinished ones (the app was quit mid-download) carry on by themselves.
+    Half-downloaded pieces that belong to no save any more are cleaned up."""
+    global _restored
+    if _restored:
+        return
+    _restored = True
+    try:
+        with open(QUEUE_FILE) as f:
+            items = json.load(f)
+    except Exception:
+        items = []
+    keep = set()
+    for it in items:
+        if not it.get("url") or not it.get("id"):
+            continue
+        job = _new_job(it["url"], it.get("quality"), jid=it["id"], **{k: it.get(k) for k in _QUEUE_KEYS})
+        keep.add(job["id"])
+        if it.get("paused"):
+            job.update(status="paused", detail=PAUSED_TEXT)
+            JOBS[job["id"]] = job
+        else:
+            _start(job)
+    os.makedirs(PARTIAL, exist_ok=True)
+    for name in os.listdir(PARTIAL):
+        if name not in keep:
+            p = os.path.join(PARTIAL, name)
+            try:
+                shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+            except OSError:
+                pass
+    _save_queue()
 
 
 def _friendly_error(e, job, browser):
@@ -696,8 +794,9 @@ def _count_size(job, info, d):
 
 def _run(job):
     with _SLOTS:
-        if job["_cancel"]:
-            job.update(status="cancelled", detail="Stopped")
+        if job["_cancel"]:  # paused or stopped while it was still waiting for its turn
+            _stopped(job)
+            _save_queue()
             return
         s = load_settings()
         job.update(status="working", detail="Looking at the link…" + (
@@ -742,7 +841,7 @@ def _run(job):
         try:
             os.makedirs(folder, exist_ok=True)
             opts = {
-                "paths": {"home": folder, "temp": os.path.join(DATA, "partial")},
+                "paths": {"home": folder, "temp": os.path.join(PARTIAL, job["id"])},  # this save's own pieces
                 "outtmpl": (safe_name(job["site"], 40) + "/" if s["site_folders"] else "")
                            + "%(saver_date|)s%(playlist_index&{} - |)s%(title).90B.%(ext)s",
                 "windowsfilenames": True,
@@ -768,23 +867,30 @@ def _run(job):
             if s["browser"]:
                 prof = login_profile(s["browser"], job["site"])
                 opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                log.ydl = ydl
-                job["date_in_name"] = bool(s.get("date_in_name"))
-                ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
-                info = ydl.extract_info(job["url"], download=True)
-            if job["_cancel"]:
-                raise Cancelled()
-            if info and not job["title"]:
-                job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
-            if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
-                for e in (info.get("entries") or [info]) if info else []:
-                    for r in (e or {}).get("requested_downloads") or []:
-                        if r.get("filepath") and os.path.exists(r["filepath"]):
-                            done_paths.append(r["filepath"])
-            if not done_paths:
-                raise RuntimeError(log.errors[-1] if log.errors else
-                                   "There's no video in this post, or it couldn't be downloaded.")
+            pending = job.get("pending") or []
+            if pending and all(os.path.exists(p) for p in pending):
+                # paused while converting: the download itself was finished, so only the conversion is redone
+                done_paths, vids = list(pending), job.get("vids") or []
+            else:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    log.ydl = ydl
+                    job["date_in_name"] = bool(s.get("date_in_name"))
+                    ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
+                    info = ydl.extract_info(job["url"], download=True)
+                if job["_cancel"]:
+                    raise Cancelled()
+                if info and not job["title"]:
+                    job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
+                if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
+                    for e in (info.get("entries") or [info]) if info else []:
+                        for r in (e or {}).get("requested_downloads") or []:
+                            if r.get("filepath") and os.path.exists(r["filepath"]):
+                                done_paths.append(r["filepath"])
+                if not done_paths:
+                    raise RuntimeError(log.errors[-1] if log.errors else
+                                       "There's no video in this post, or it couldn't be downloaded.")
+                vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
+            job.update(pending=list(dict.fromkeys(done_paths)), vids=vids)
             final = []
             for k, p in enumerate(dict.fromkeys(done_paths)):
                 if height and s["mac_friendly"]:
@@ -808,7 +914,6 @@ def _run(job):
                 final = [target]
                 job["title"] = up["title"]
                 job["upgraded"] = f"Replaced your earlier {up['from']}p copy with {up['to']}p (the old one is in the Trash)"
-            vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
             remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
             job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
             job.update(status="done", progress=100, paths=final,
@@ -825,12 +930,25 @@ def _run(job):
             if s["reveal_when_done"]:
                 reveal(final[0])
         except Cancelled:
-            job.update(status="cancelled", detail="Stopped", progress=0)
+            _stopped(job)
         except Exception as e:
             job.update(status="error", error=_friendly_error(e, job, s["browser"]), detail="")
         finally:
             with _names_lock:
                 _reserved.difference_update(mine)
+            if job["status"] == "done":
+                job["pending"] = []
+                _drop_partial(job["id"])
+            _save_queue()
+
+
+def _stopped(job):
+    """After Pause (keep the pieces, show Resume) or Stop (throw the pieces away)."""
+    if job.get("_pause"):
+        job.update(status="paused", detail=PAUSED_TEXT)
+    else:
+        job.update(status="cancelled", detail="Stopped", progress=0)
+        _drop_partial(job["id"])
 
 
 # ---------------------------------------------------------------- "Use my login from" test

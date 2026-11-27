@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 import saver
 
 router = APIRouter()
+saver.restore_queue()   # paused saves come back, unfinished ones carry on
 
 
 @router.get("/state")
@@ -42,6 +43,17 @@ async def links(req: Request):
 def cancel(jid: str):
     saver.cancel(jid)
     return {"ok": True}
+
+
+@router.post("/pause/{jid}")
+def pause(jid: str):
+    saver.pause(jid)
+    return {"ok": True}
+
+
+@router.post("/resume/{jid}")
+def resume(jid: str):
+    return {"ok": saver.resume(jid)}
 
 
 @router.post("/retry/{jid}")

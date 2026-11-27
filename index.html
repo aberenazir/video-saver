@@ -50,6 +50,7 @@ h2 small{font-weight:400;color:var(--muted)}
 .badge{font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:20px;background:var(--soft);color:var(--ink)}
 .bar{height:6px;background:var(--soft);border-radius:4px;margin-top:7px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .5s}
+.bar.paused i{background:var(--muted)}
 .err{color:var(--bad);font-size:13px;margin-top:4px}
 .ok{color:var(--ok)}
 .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:none}
@@ -177,14 +178,18 @@ function drawJobs(){
       ? `<button class="btn small primary" data-p="${esc(p)}" onclick="reveal(this.dataset.p)">${SHOW}</button><button class="btn small" data-p="${esc(p)}" onclick="openFile(this.dataset.p)">Open</button>`
       : j.status==='error' || j.status==='cancelled'
       ? `<button class="btn small" onclick="post('/api/retry/${j.id}').then(refresh)">Try again</button>`
-      : `<button class="btn small" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`;
+      : j.status==='paused'
+      ? `<button class="btn small primary" onclick="post('/api/resume/${j.id}').then(refresh)">Resume</button><button class="btn small" title="Stop and throw away what came in so far" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`
+      : `<button class="btn small" title="Stop for now and carry on later from here" onclick="post('/api/pause/${j.id}').then(refresh)">Pause</button><button class="btn small" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`;
     const state = j.status==='done' ? `<span class="ok">✓ Saved${j.paths.length>1?' '+j.paths.length+' videos':''}${j.height?' · '+hq(j.height):''}${j.detail?' · '+esc(j.detail):''}</span>`
-      : j.status==='cancelled' ? 'Stopped' : esc(j.detail);
+      : j.status==='cancelled' ? 'Stopped'
+      : j.status==='paused' ? esc(j.detail) + (j.size && j.got ? ` · ${fmtSize(j.got)} of ${fmtSize(j.size)} saved so far` : '')
+      : esc(j.detail);
     return `<div class="item">
       ${j.thumbnail ? `<img class="thumb" src="${esc(j.thumbnail)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
       <div class="body"><div class="title">${esc(j.title || j.url)}</div>
         <div class="meta"><span class="badge">${esc(j.site)}</span><span>${esc(j.quality_label)}</span>${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="How big the file is">${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
-        ${j.status==='working'||j.status==='waiting' ? `<div class="bar"><i style="width:${j.progress}%"></i></div>` : ''}
+        ${j.status==='working'||j.status==='waiting'||j.status==='paused' ? `<div class="bar${j.status==='paused'?' paused':''}"><i style="width:${j.progress}%"></i></div>` : ''}
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}</div>
       <div class="acts">${acts}</div></div>`;
   }).join('');

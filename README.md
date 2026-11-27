@@ -19,6 +19,11 @@ the Dock. Close the window or press ⌘Q to quit.
 
 Videos go to **Downloads › Video Saver** until you press **Change…** and pick another folder.
 
+**Pause / Resume:** a save that's running has **Pause** and **Stop**. Pause keeps what came in so far (each save has
+its own folder in `<data>/partial/<id>`); **Resume** carries on from there. Paused saves stay paused after quitting
+or restarting the Mac, and saves that were still running when you quit carry on by themselves next time
+(`<data>/queue.json`). Stop on a paused save forgets it and throws its pieces away.
+
 ## Settings
 
 | Setting | What it does |

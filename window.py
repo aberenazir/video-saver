@@ -121,7 +121,7 @@ def main():
         if work:
             api.window.localization["global.quitConfirmation"] = (
                 f"Video Saver is still saving {len(work)} video{'s' if len(work) > 1 else ''}.\n\nIf you quit now "
-                "they stop. Press Try again later and they continue where they left off.")
+                "they carry on from where they stopped the next time you open Video Saver.")
         return True
 
     api.window.events.closing += on_closing
