@@ -577,8 +577,33 @@ def make_mac_friendly(path, progress=None, cancelled=lambda: False):
 
 
 # ---------------------------------------------------------------- jobs
-class Cancelled(Exception):
+class Cancelled(yt_dlp.utils.DownloadCancelled):
+    """Pause / Stop. yt-dlp passes its own "cancelled" signal straight up (no retries, no "error"), so raising it from
+    the logger or a hook stops the work at its next step: while looking at the link, between retries, before merging."""
+
+
+# ffmpeg runs that yt-dlp starts (merging video + sound) per save, so Pause / Stop can close them at once
+_PROCS = {}   # thread id -> ffmpeg processes it started
+try:
+    import yt_dlp.postprocessor.ffmpeg as _ffpp
+
+    class _TrackedPopen(_ffpp.Popen):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            _PROCS.setdefault(threading.get_ident(), set()).add(self)
+
+    _ffpp.Popen = _TrackedPopen
+except Exception:
     pass
+
+
+def _kill_work(job):
+    for proc in list(_PROCS.get(job.get("_tid"), ())):
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
 
 
 class _Log:
@@ -588,6 +613,8 @@ class _Log:
         self.errors, self.job, self.ydl, self.reconnects = [], job, None, 0
 
     def debug(self, msg):
+        if self.job is not None and self.job["_cancel"]:  # yt-dlp says something at almost every step
+            raise Cancelled()
         if "Re-extracting data" in msg and self.ydl:  # a stalled download was reconnected
             self.reconnects += 1
             if self.job is not None:
@@ -610,7 +637,8 @@ def _new_job(url, quality, jid=None, **keep):
     job = {"id": jid or uuid.uuid4().hex[:10], "url": url, "site": site_of(url), "quality": quality,
            "quality_label": QUALITIES[quality][0], "status": "waiting", "detail": "Waiting…", "progress": 0, "title": "",
            "thumbnail": "", "uploader": "", "duration": 0, "count": 1, "index": 1, "paths": [], "error": "",
-           "added": time.time(), "size": 0, "got": 0, "pending": [], "vids": [], "_cancel": False, "_pause": False}
+           "added": time.time(), "size": 0, "got": 0, "pending": [], "vids": [], "_cancel": False, "_pause": False,
+           "_done": threading.Event(), "_after": None}
     job.update({k: v for k, v in keep.items() if k in job and v is not None and k not in ("id", "url", "quality")})
     return job
 
@@ -637,11 +665,14 @@ def add(links, quality=None):
 
 
 def pause(jid):
-    """Stops the download but keeps what came in so far; Resume carries on from there."""
+    """Stops the download but keeps what came in so far; Resume carries on from there. The card says Paused at once;
+    the download itself stops at its next step (Resume waits for that before it touches the same files)."""
     j = JOBS.get(jid)
     if j and j["status"] in ("waiting", "working"):
         j["_pause"] = j["_cancel"] = True
-        j["detail"] = "Pausing…"
+        j.update(status="paused", detail=PAUSED_TEXT)
+        _kill_work(j)
+        _save_queue()
 
 
 def resume(jid):
@@ -649,6 +680,7 @@ def resume(jid):
     if not j or j["status"] != "paused":
         return False
     fresh = _new_job(j["url"], j["quality"], jid=jid, **{k: j.get(k) for k in _QUEUE_KEYS})
+    fresh["_after"] = j["_done"]   # the paused download may still be winding down
     _start(fresh)
     return True
 
@@ -659,11 +691,16 @@ def cancel(jid):
         return
     if j["status"] == "paused":  # Stop on a paused save: forget it and its half-downloaded pieces
         JOBS.pop(jid, None)
-        _drop_partial(jid)
+        j["_pause"] = False
+        if j["_done"].is_set():
+            _drop_partial(jid)
+        # else: the download is still winding down; it throws its pieces away when it ends (see _stopped)
         _save_queue()
     elif j["status"] in ("waiting", "working"):
         j["_pause"], j["_cancel"] = False, True
-        j["detail"] = "Stopping…"
+        j.update(status="cancelled", detail="Stopped", progress=0)
+        _kill_work(j)
+        _save_queue()
 
 
 def retry(jid):
@@ -671,7 +708,9 @@ def retry(jid):
     j = JOBS.get(jid)
     if not j or j["status"] in ("waiting", "working"):
         return []
-    _start(_new_job(j["url"], j["quality"], jid=jid, title=j.get("title"), thumbnail=j.get("thumbnail")))
+    fresh = _new_job(j["url"], j["quality"], jid=jid, title=j.get("title"), thumbnail=j.get("thumbnail"))
+    fresh["_after"] = j["_done"]
+    _start(fresh)
     return [jid]
 
 
@@ -793,153 +832,181 @@ def _count_size(job, info, d):
 
 
 def _run(job):
-    with _SLOTS:
-        if job["_cancel"]:  # paused or stopped while it was still waiting for its turn
-            _stopped(job)
-            _save_queue()
-            return
-        s = load_settings()
-        job.update(status="working", detail="Looking at the link…" + (
-            " (YouTube takes about 20 seconds)" if job["site"] == "YouTube" else ""))
-        label, height = QUALITIES[job["quality"]]
-        folder = os.path.expanduser(s["folder"] or DEFAULTS["folder"])
-        done_paths = []
-        log = _Log(job)
-        mine = set()   # file names this download reserved
+    """One save, in its own thread: waits for an earlier run of the same save to end (after Pause), waits for a free
+    slot (up to 3 at once) unless it's paused / stopped meanwhile, then does the work."""
+    job["_tid"] = threading.get_ident()
+    try:
+        if job.get("_after"):
+            job["_after"].wait()
+        while not _SLOTS.acquire(timeout=0.3):
+            if job["_cancel"]:
+                _stopped(job)
+                _save_queue()
+                return
+        try:
+            if job["_cancel"]:  # paused / stopped just as the slot came free
+                _stopped(job)
+                _save_queue()
+            else:
+                _work(job)
+        finally:
+            _SLOTS.release()
+    finally:
+        _PROCS.pop(job["_tid"], None)
+        job["_done"].set()
 
-        def hook(d):
+
+def _work(job):
+    s = load_settings()
+    job.update(status="working", detail="Looking at the link…" + (
+        " (YouTube takes about 20 seconds)" if job["site"] == "YouTube" else ""))
+    label, height = QUALITIES[job["quality"]]
+    folder = os.path.expanduser(s["folder"] or DEFAULTS["folder"])
+    done_paths = []
+    log = _Log(job)
+    mine = set()   # file names this download reserved
+
+    def hook(d):
+        if job["_cancel"]:
+            raise Cancelled()
+        info = d.get("info_dict") or {}
+        if info and not job["title"]:
+            job.update(title=info.get("title") or info.get("description", "")[:80] or job["title"],
+                       thumbnail=info.get("thumbnail") or job["thumbnail"],
+                       uploader=info.get("uploader") or info.get("channel") or info.get("uploader_id") or "",
+                       duration=info.get("duration") or 0,
+                       site=site_of(job["url"], info.get("extractor_key", "")))
+        n, i = info.get("n_entries") or info.get("playlist_count"), info.get("playlist_index")
+        if n and i:
+            job.update(count=n, index=i)
+        if d.get("status") in ("downloading", "finished"):
+            _count_size(job, info, d)
+        if d.get("status") == "downloading":
+            tot = d.get("total_bytes") or d.get("total_bytes_estimate")
+            part = d.get("downloaded_bytes", 0) / tot if tot else 0
+            each = 100 / max(1, job["count"])
+            job["progress"] = min(97, round((job["index"] - 1) * each + part * each * 0.95))
+            sp, eta = d.get("speed"), d.get("eta")
+            extra = (f" · {sp / 1e6:.1f} MB/s" if sp else "") + (f" · {int(eta)} s left" if eta else "")
+            many = f" ({job['index']} of {job['count']})" if job["count"] > 1 else ""
+            of = f" · {nice_size(job['got'])} of {nice_size(job['size'])}" if job.get("size") else ""
+            job["detail"] = f"Downloading{many}{of}{extra}"
+        elif d.get("status") == "finished":
+            job["detail"] = "Putting video and sound together…" if height else "Making the MP3…"
+
+    def stop_check(d):  # before and after each step that follows the download (merging, MP3, moving)
+        if job["_cancel"]:
+            raise Cancelled()
+
+    def post(path):  # called with each final file
+        done_paths.append(path)
+
+    try:
+        os.makedirs(folder, exist_ok=True)
+        opts = {
+            "paths": {"home": folder, "temp": os.path.join(PARTIAL, job["id"])},  # this save's own pieces
+            "outtmpl": (safe_name(job["site"], 40) + "/" if s["site_folders"] else "")
+                       + "%(saver_date|)s%(playlist_index&{} - |)s%(title).90B.%(ext)s",
+            "windowsfilenames": True,
+            "ffmpeg_location": FFMPEG, "js_runtimes": JS_RUNTIMES, "quiet": True, "no_warnings": True,
+            "noplaylist": True, "playlistend": 300, "retries": 15, "fragment_retries": 15, "continuedl": True,
+            "socket_timeout": 20,  # a connection that hangs is dropped and retried, not waited on
+            # stall protection: below 50 KB/s the link is fetched again on a fresh connection (a stuck server
+            # or a throttled one), and big files come in 10 MB pieces (YouTube slows unbroken downloads)
+            "throttledratelimit": 50_000, "http_chunk_size": 10_485_760,
+            "progress_hooks": [hook], "post_hooks": [post], "ignoreerrors": "only_download",
+            "postprocessor_hooks": [stop_check],
+            "noprogress": True, "updatetime": False, "logger": log,  # file date = when you saved it, so it's on top in Finder
+        }
+        if height:
+            # "res" is the SHORT side, so 1080p means 1080x1920 for a vertical Reel/Short/TikTok too (a height
+            # limit would pick 608x1080). Order: sharpest, then smoothest (60fps), then the Mac-friendly codec
+            # (H.264 avoids a lossy conversion), then the highest bitrate.
+            opts.update(format="bv*+ba/b", merge_output_format="mp4",
+                        format_sort=(["res", "fps"] if job["quality"] == "best" else [f"res:{height}", "fps"])
+                        + [FAST_SORT, "br"])
+        else:
+            opts.update(format="ba/b", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
+                                                         "preferredquality": "192"}])
+        if s["browser"]:
+            prof = login_profile(s["browser"], job["site"])
+            opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
+        pending = job.get("pending") or []
+        if pending and all(os.path.exists(p) for p in pending):
+            # paused while converting: the download itself was finished, so only the conversion is redone
+            done_paths, vids = list(pending), job.get("vids") or []
+        else:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                log.ydl = ydl
+                job["date_in_name"] = bool(s.get("date_in_name"))
+                ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
+                info = ydl.extract_info(job["url"], download=True)
             if job["_cancel"]:
                 raise Cancelled()
-            info = d.get("info_dict") or {}
             if info and not job["title"]:
-                job.update(title=info.get("title") or info.get("description", "")[:80] or job["title"],
-                           thumbnail=info.get("thumbnail") or job["thumbnail"],
-                           uploader=info.get("uploader") or info.get("channel") or info.get("uploader_id") or "",
-                           duration=info.get("duration") or 0,
-                           site=site_of(job["url"], info.get("extractor_key", "")))
-            n, i = info.get("n_entries") or info.get("playlist_count"), info.get("playlist_index")
-            if n and i:
-                job.update(count=n, index=i)
-            if d.get("status") in ("downloading", "finished"):
-                _count_size(job, info, d)
-            if d.get("status") == "downloading":
-                tot = d.get("total_bytes") or d.get("total_bytes_estimate")
-                part = d.get("downloaded_bytes", 0) / tot if tot else 0
-                each = 100 / max(1, job["count"])
-                job["progress"] = min(97, round((job["index"] - 1) * each + part * each * 0.95))
-                sp, eta = d.get("speed"), d.get("eta")
-                extra = (f" · {sp / 1e6:.1f} MB/s" if sp else "") + (f" · {int(eta)} s left" if eta else "")
-                many = f" ({job['index']} of {job['count']})" if job["count"] > 1 else ""
-                of = f" · {nice_size(job['got'])} of {nice_size(job['size'])}" if job.get("size") else ""
-                job["detail"] = f"Downloading{many}{of}{extra}"
-            elif d.get("status") == "finished":
-                job["detail"] = "Putting video and sound together…" if height else "Making the MP3…"
-
-        def post(path):  # called with each final file
-            done_paths.append(path)
-
-        try:
-            os.makedirs(folder, exist_ok=True)
-            opts = {
-                "paths": {"home": folder, "temp": os.path.join(PARTIAL, job["id"])},  # this save's own pieces
-                "outtmpl": (safe_name(job["site"], 40) + "/" if s["site_folders"] else "")
-                           + "%(saver_date|)s%(playlist_index&{} - |)s%(title).90B.%(ext)s",
-                "windowsfilenames": True,
-                "ffmpeg_location": FFMPEG, "js_runtimes": JS_RUNTIMES, "quiet": True, "no_warnings": True,
-                "noplaylist": True, "playlistend": 300, "retries": 15, "fragment_retries": 15, "continuedl": True,
-                "socket_timeout": 20,  # a connection that hangs is dropped and retried, not waited on
-                # stall protection: below 50 KB/s the link is fetched again on a fresh connection (a stuck server
-                # or a throttled one), and big files come in 10 MB pieces (YouTube slows unbroken downloads)
-                "throttledratelimit": 50_000, "http_chunk_size": 10_485_760,
-                "progress_hooks": [hook], "post_hooks": [post], "ignoreerrors": "only_download",
-                "noprogress": True, "updatetime": False, "logger": log,  # file date = when you saved it, so it's on top in Finder
-            }
-            if height:
-                # "res" is the SHORT side, so 1080p means 1080x1920 for a vertical Reel/Short/TikTok too (a height
-                # limit would pick 608x1080). Order: sharpest, then smoothest (60fps), then the Mac-friendly codec
-                # (H.264 avoids a lossy conversion), then the highest bitrate.
-                opts.update(format="bv*+ba/b", merge_output_format="mp4",
-                            format_sort=(["res", "fps"] if job["quality"] == "best" else [f"res:{height}", "fps"])
-                            + [FAST_SORT, "br"])
-            else:
-                opts.update(format="ba/b", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
-                                                             "preferredquality": "192"}])
-            if s["browser"]:
-                prof = login_profile(s["browser"], job["site"])
-                opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
-            pending = job.get("pending") or []
-            if pending and all(os.path.exists(p) for p in pending):
-                # paused while converting: the download itself was finished, so only the conversion is redone
-                done_paths, vids = list(pending), job.get("vids") or []
-            else:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    log.ydl = ydl
-                    job["date_in_name"] = bool(s.get("date_in_name"))
-                    ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
-                    info = ydl.extract_info(job["url"], download=True)
-                if job["_cancel"]:
-                    raise Cancelled()
-                if info and not job["title"]:
-                    job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
-                if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
-                    for e in (info.get("entries") or [info]) if info else []:
-                        for r in (e or {}).get("requested_downloads") or []:
-                            if r.get("filepath") and os.path.exists(r["filepath"]):
-                                done_paths.append(r["filepath"])
-                if not done_paths:
-                    raise RuntimeError(log.errors[-1] if log.errors else
-                                       "There's no video in this post, or it couldn't be downloaded.")
-                vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
-            job.update(pending=list(dict.fromkeys(done_paths)), vids=vids)
-            final = []
-            for k, p in enumerate(dict.fromkeys(done_paths)):
-                if height and s["mac_friendly"]:
-                    def conv(frac, k=k):
-                        if frac is None:
-                            job["detail"] = "Waiting for another video to finish converting…"
-                        else:
-                            job["detail"] = "Making it Mac-friendly (H.264)… " + f"{round(frac * 100)}%"
-                            job["progress"] = 97 + min(2, int(frac * 3))
-                    p = make_mac_friendly(p, conv, lambda: job["_cancel"])
-                stem, ext = os.path.splitext(p)
-                if stem.endswith("...") and not os.path.exists(stem[:-3].rstrip() + "…" + ext):
-                    os.replace(p, stem[:-3].rstrip() + "…" + ext)
-                    p = stem[:-3].rstrip() + "…" + ext
-                final.append(p)
-            up = job.get("_upgrade")
-            if up and len(final) == 1 and os.path.exists(final[0]):
-                target = up["stem"] + os.path.splitext(final[0])[1]
-                to_trash(up["old"])
-                os.replace(final[0], target)
-                final = [target]
-                job["title"] = up["title"]
-                job["upgraded"] = f"Replaced your earlier {up['from']}p copy with {up['to']}p (the old one is in the Trash)"
-            remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
-            job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
-            job.update(status="done", progress=100, paths=final,
-                       detail=job.get("upgraded") or ("Already in your folder (saved before)" if job.get("already") else ""))
-            _, got, _, dur = media_info(final[0])
-            job["height"] = got
-            add_history({"id": job["id"], "url": job["url"], "site": job["site"], "title": job["title"] or
-                         os.path.splitext(os.path.basename(final[0]))[0], "uploader": job["uploader"],
-                         "thumbnail": job["thumbnail"], "quality": label, "height": got,
-                         "duration": job["duration"] or dur, "paths": final, "saved": time.time(),
-                         "posted": job.get("posted", "")})
-            if s["notify"]:
-                notify(f"Saved to {os.path.basename(folder)}", job["title"] or os.path.basename(final[0]))
-            if s["reveal_when_done"]:
-                reveal(final[0])
-        except Cancelled:
+                job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
+            if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
+                for e in (info.get("entries") or [info]) if info else []:
+                    for r in (e or {}).get("requested_downloads") or []:
+                        if r.get("filepath") and os.path.exists(r["filepath"]):
+                            done_paths.append(r["filepath"])
+            if not done_paths:
+                raise RuntimeError(log.errors[-1] if log.errors else
+                                   "There's no video in this post, or it couldn't be downloaded.")
+            vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
+        job.update(pending=list(dict.fromkeys(done_paths)), vids=vids)
+        final = []
+        for k, p in enumerate(dict.fromkeys(done_paths)):
+            if height and s["mac_friendly"]:
+                def conv(frac, k=k):
+                    if frac is None:
+                        job["detail"] = "Waiting for another video to finish converting…"
+                    else:
+                        job["detail"] = "Making it Mac-friendly (H.264)… " + f"{round(frac * 100)}%"
+                        job["progress"] = 97 + min(2, int(frac * 3))
+                p = make_mac_friendly(p, conv, lambda: job["_cancel"])
+            stem, ext = os.path.splitext(p)
+            if stem.endswith("...") and not os.path.exists(stem[:-3].rstrip() + "…" + ext):
+                os.replace(p, stem[:-3].rstrip() + "…" + ext)
+                p = stem[:-3].rstrip() + "…" + ext
+            final.append(p)
+        up = job.get("_upgrade")
+        if up and len(final) == 1 and os.path.exists(final[0]):
+            target = up["stem"] + os.path.splitext(final[0])[1]
+            to_trash(up["old"])
+            os.replace(final[0], target)
+            final = [target]
+            job["title"] = up["title"]
+            job["upgraded"] = f"Replaced your earlier {up['from']}p copy with {up['to']}p (the old one is in the Trash)"
+        remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
+        job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
+        job.update(status="done", progress=100, paths=final,
+                   detail=job.get("upgraded") or ("Already in your folder (saved before)" if job.get("already") else ""))
+        _, got, _, dur = media_info(final[0])
+        job["height"] = got
+        add_history({"id": job["id"], "url": job["url"], "site": job["site"], "title": job["title"] or
+                     os.path.splitext(os.path.basename(final[0]))[0], "uploader": job["uploader"],
+                     "thumbnail": job["thumbnail"], "quality": label, "height": got,
+                     "duration": job["duration"] or dur, "paths": final, "saved": time.time(),
+                     "posted": job.get("posted", "")})
+        if s["notify"]:
+            notify(f"Saved to {os.path.basename(folder)}", job["title"] or os.path.basename(final[0]))
+        if s["reveal_when_done"]:
+            reveal(final[0])
+    except Cancelled:
+        _stopped(job)
+    except Exception as e:
+        if job["_cancel"]:   # stopping made the merge / a request fail: that's the Pause / Stop, not an error
             _stopped(job)
-        except Exception as e:
+        else:
             job.update(status="error", error=_friendly_error(e, job, s["browser"]), detail="")
-        finally:
-            with _names_lock:
-                _reserved.difference_update(mine)
-            if job["status"] == "done":
-                job["pending"] = []
-                _drop_partial(job["id"])
-            _save_queue()
+    finally:
+        with _names_lock:
+            _reserved.difference_update(mine)
+        if job["status"] == "done":
+            job["pending"] = []
+            _drop_partial(job["id"])
+        _save_queue()
 
 
 def _stopped(job):
