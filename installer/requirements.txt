@@ -1,5 +1,6 @@
 # What the self-contained app bundles (Mac and Windows). pywebview brings pyobjc on a Mac and pythonnet on Windows.
 yt-dlp[default]
+gallery-dl
 fastapi
 uvicorn
 imageio-ffmpeg

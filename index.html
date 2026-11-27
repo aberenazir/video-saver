@@ -82,7 +82,7 @@ dialog h3{margin:0 0 14px}
 
   <div class="card">
     <div class="go">
-      <textarea id="links" rows="2" placeholder="Paste a link from YouTube, Instagram, TikTok, X, Facebook… (several? one per line)"></textarea>
+      <textarea id="links" rows="2" placeholder="Paste a link to a video or photo post from YouTube, Instagram, TikTok, X, Facebook… (several? one per line)"></textarea>
       <select id="quality" title="Quality"></select>
       <button class="btn primary" id="saveBtn" onclick="saveLinks()">Save video</button>
     </div>
@@ -93,7 +93,7 @@ dialog h3{margin:0 0 14px}
     <div class="dest">Saves to <b id="folderName"></b>
       <button class="btn small" onclick="chooseFolder()">Change…</button>
       <button class="btn small" onclick="post('/api/open-folder')" id="openFolderBtn">Open in Finder</button></div>
-    <div class="sites">Works with YouTube (videos, Shorts, playlists), Instagram (Reels, posts, stories), TikTok, X / Twitter, Facebook, Threads, Reddit, Pinterest, Snapchat, Vimeo, Twitch clips, Dailymotion, Bilibili, SoundCloud and many more.</div>
+    <div class="sites">Works with YouTube (videos, Shorts, playlists, posts), Instagram (Reels, posts, stories), TikTok, X / Twitter, Facebook, Threads, Reddit, Pinterest, Snapchat, Vimeo, Twitch clips, Dailymotion, Bilibili, SoundCloud and many more. Photos too (Instagram photos and carousels, X, TikTok photo posts, YouTube posts, Pinterest, Reddit…), at the full size the site keeps.</div>
   </div>
 
   <h2 id="nowHead" style="display:none">Saving now <span class="sp"></span><button class="btn link" id="clearBtn" onclick="post('/api/clear').then(refresh)">Clear finished</button></h2>
@@ -169,6 +169,7 @@ async function refresh(){
   if(settingsDlg.open) drawSettings();
 }
 
+function what(n, photos){ const v = n-(photos||0); const pv = v>1 ? v+' videos' : v ? 'video' : ''; const pp = photos ? photos+' photo'+(photos>1?'s':'') : ''; return photos ? [pv, pp].filter(Boolean).join(' + ') : v>1 ? pv : ''; }
 function drawJobs(){
   $('nowHead').style.display = S.jobs.length ? '' : 'none';
   $('clearBtn').style.display = S.jobs.some(j=>['done','error','cancelled'].includes(j.status)) ? '' : 'none';
@@ -181,14 +182,14 @@ function drawJobs(){
       : j.status==='paused'
       ? `<button class="btn small primary" onclick="post('/api/resume/${j.id}').then(refresh)">Resume</button><button class="btn small" title="Stop and throw away what came in so far" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`
       : `<button class="btn small" title="Stop for now and carry on later from here" onclick="post('/api/pause/${j.id}').then(refresh)">Pause</button><button class="btn small" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`;
-    const state = j.status==='done' ? `<span class="ok">✓ Saved${j.paths.length>1?' '+j.paths.length+' videos':''}${j.height?' · '+hq(j.height):''}${j.detail?' · '+esc(j.detail):''}</span>`
+    const state = j.status==='done' ? `<span class="ok">✓ Saved${what(j.paths.length, j.photos) ? ' '+what(j.paths.length, j.photos) : ''}${j.height?' · '+hq(j.height):''}${j.detail?' · '+esc(j.detail):''}</span>`
       : j.status==='cancelled' ? 'Stopped'
       : j.status==='paused' ? esc(j.detail) + (j.size && j.got ? ` · ${fmtSize(j.got)} of ${fmtSize(j.size)} saved so far` : '')
       : esc(j.detail);
     return `<div class="item">
       ${j.thumbnail ? `<img class="thumb" src="${esc(j.thumbnail)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
       <div class="body"><div class="title">${esc(j.title || j.url)}</div>
-        <div class="meta"><span class="badge">${esc(j.site)}</span><span>${esc(j.quality_label)}</span>${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="How big the file is">${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
+        <div class="meta"><span class="badge">${esc(j.site)}</span>${j.status==='done'&&j.photos&&!j.height?'':`<span>${esc(j.quality_label)}</span>`}${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="How big the file is">${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
         ${j.status==='working'||j.status==='waiting'||j.status==='paused' ? `<div class="bar${j.status==='paused'?' paused':''}"><i style="width:${j.progress}%"></i></div>` : ''}
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}</div>
       <div class="acts">${acts}</div></div>`;
@@ -199,7 +200,7 @@ function drawHistory(){
   const q = $('search').value.trim().toLowerCase();
   const items = S.history.filter(h => !q || (h.title+' '+h.site+' '+(h.uploader||'')).toLowerCase().includes(q));
   $('count').textContent = S.history.length ? S.history.length : '';
-  if(!S.history.length){ $('history').innerHTML = `<div class="empty">Videos you save show up here. Copy a link in any app (Share → Copy link), then paste it above.</div>`; return; }
+  if(!S.history.length){ $('history').innerHTML = `<div class="empty">Videos and photos you save show up here. Copy a link in any app (Share → Copy link), then paste it above.</div>`; return; }
   if(!items.length){ $('history').innerHTML = `<div class="empty">Nothing matches “${esc(q)}”.</div>`; return; }
   $('history').innerHTML = items.slice(0,200).map(h => {
     const f = h.files[0] || {}, gone = !h.files.some(x=>x.exists);
@@ -207,7 +208,7 @@ function drawHistory(){
     return `<div class="item">
       ${h.thumbnail ? `<img class="thumb" src="${esc(h.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
       <div class="body"><div class="title" title="${esc(f.path)}">${esc(h.title)}</div>
-        <div class="meta"><span class="badge">${esc(h.site)}</span>${h.height?`<span>${hq(h.height)}</span>`:h.quality.startsWith('Audio')?'<span>MP3</span>':''}${h.duration?`<span>${fmtDur(h.duration)}</span>`:''}${size?`<span>${fmtSize(size)}</span>`:''}${h.files.length>1?`<span>${h.files.length} videos</span>`:''}<span>${fmtDate(h.saved)}</span>
+        <div class="meta"><span class="badge">${esc(h.site)}</span>${h.height?`<span>${hq(h.height)}</span>`:h.quality.startsWith('Audio')?'<span>MP3</span>':''}${h.photos?`<span>📷 ${h.photos} photo${h.photos>1?'s':''}</span>`:''}${h.duration?`<span>${fmtDur(h.duration)}</span>`:''}${size?`<span>${fmtSize(size)}</span>`:''}${h.files.length-(h.photos||0)>1?`<span>${h.files.length-(h.photos||0)} videos</span>`:''}<span>${fmtDate(h.saved)}</span>
         ${gone?'<span class="err" style="margin:0">File moved or deleted</span>':''}</div></div>
       <div class="acts">${gone ? `<button class="btn small" data-p="${esc(h.url)}" onclick="saveAgain(this.dataset.p)">Save again</button>` :
         `<button class="btn small" data-p="${esc(f.path)}" onclick="reveal(this.dataset.p)">${SHOW}</button><button class="btn small" data-p="${esc(f.path)}" onclick="openFile(this.dataset.p)">Open</button>`}

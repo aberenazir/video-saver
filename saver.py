@@ -4,7 +4,7 @@ Paste a link from YouTube, Instagram, TikTok, X, Facebook, Reddit, Vimeo, Pinter
 (anything yt-dlp knows) and the video is saved into the Finder folder you chose, made Mac-friendly (H.264/AAC)
 so it opens in QuickTime, iMovie, CapCut and ThumbStudio Video.
 """
-import glob, json, os, re, shutil, subprocess, sys, threading, time, uuid
+import glob, json, logging, os, re, shutil, subprocess, sys, threading, time, uuid
 
 MAC, WINDOWS = sys.platform == "darwin", os.name == "nt"
 # FROZEN = the self-contained app (PyInstaller: Python and every package inside the app). Link Transcriber and the
@@ -784,7 +784,7 @@ def restore_queue():
 def _friendly_error(e, job, browser):
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", "")
     low = msg.lower()
-    login = any(w in low for w in ("login", "log in", "logged-in", "logged in", "sign in", "cookies", "private", "rate-limit", "rate limit",
+    login = any(w in low for w in ("401 unauthorized", "login", "log in", "logged-in", "logged in", "sign in", "cookies", "private", "rate-limit", "rate limit",
                                    "authentication", "confirm you", "not a bot", "age", "inappropriate",
                                    "followers", "unavailable for certain audiences"))
     if login and not browser:
@@ -794,9 +794,9 @@ def _friendly_error(e, job, browser):
         return (f"{job['site']} still refused, even with your {browser.title()} login. Make sure you're logged in "
                 f"to {job['site']} in {browser.title()} and can watch it there, then Try again. ({msg[:160]})")
     if "unsupported url" in low:
-        return f"This link isn't a video page {APP_NAME} knows. Copy the link of the post/video itself and try again."
-    if "no video" in low or "there is no video" in low:
-        return "There's no video in this post (only pictures or text)."
+        return f"This link isn't a video or photo page {APP_NAME} knows. Copy the link of the post itself and try again."
+    if "no video" in low or "there is no video" in low or "no results" in low:
+        return "There's no video or photo in this post (only text), or it was deleted."
     if WINDOWS and browser and browser != "firefox" and ("cookie" in low or "decrypt" in low or "dpapi" in low):
         return (f"Windows doesn't let other apps read {browser.title()}'s login (Chrome, Edge, Brave, Opera and "
                 "Vivaldi lock it). Log in to the site in Firefox and pick Firefox in Settings → \"Use my login from\".")
@@ -932,28 +932,50 @@ def _work(job):
             prof = login_profile(s["browser"], job["site"])
             opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
         pending = job.get("pending") or []
+        photos, video_error, vids = [], None, []
         if pending and all(os.path.exists(p) for p in pending):
             # paused while converting: the download itself was finished, so only the conversion is redone
             done_paths, vids = list(pending), job.get("vids") or []
+        elif _yt_post(job["url"]):   # a YouTube post holds photos (yt-dlp doesn't read posts)
+            photos = save_photos(job, s, folder)
         else:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                log.ydl = ydl
-                job["date_in_name"] = bool(s.get("date_in_name"))
-                ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
-                info = ydl.extract_info(job["url"], download=True)
-            if job["_cancel"]:
-                raise Cancelled()
-            if info and not job["title"]:
-                job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
-            if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
-                for e in (info.get("entries") or [info]) if info else []:
-                    for r in (e or {}).get("requested_downloads") or []:
-                        if r.get("filepath") and os.path.exists(r["filepath"]):
-                            done_paths.append(r["filepath"])
-            if not done_paths:
-                raise RuntimeError(log.errors[-1] if log.errors else
-                                   "There's no video in this post, or it couldn't be downloaded.")
-            vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    log.ydl = ydl
+                    job["date_in_name"] = bool(s.get("date_in_name"))
+                    ydl.add_post_processor(_UniqueName(ydl, job, mine), when="video")
+                    info = ydl.extract_info(job["url"], download=True)
+                if job["_cancel"]:
+                    raise Cancelled()
+                if info and not job["title"]:
+                    job.update(title=info.get("title") or "", thumbnail=info.get("thumbnail") or "")
+                if not done_paths:  # already saved before: yt-dlp skips it, so find the existing file
+                    for e in (info.get("entries") or [info]) if info else []:
+                        for r in (e or {}).get("requested_downloads") or []:
+                            if r.get("filepath") and os.path.exists(r["filepath"]):
+                                done_paths.append(r["filepath"])
+                if not done_paths:
+                    raise RuntimeError(log.errors[-1] if log.errors else
+                                       "There's no video in this post, or it couldn't be downloaded.")
+                vids = [_vid(e) for e in ((info.get("entries") or [info]) if info else []) if e]
+            except Cancelled:
+                raise
+            except Exception as e:   # no video here: it may be a photo post (or the photo downloader knows the site)
+                if job["_cancel"] or not photo_link(job["url"]):
+                    raise
+                video_error = e
+            if video_error is not None:
+                try:
+                    photos = save_photos(job, s, folder)
+                except Cancelled:
+                    raise
+                except Exception as e:
+                    raise (e if "no video" in str(video_error).lower() or "unsupported url" in str(video_error).lower()
+                           else video_error)
+                if not photos:
+                    raise video_error
+            elif height and MIXED.search(job["url"]):   # a carousel / post with videos AND photos: the photos too
+                photos = save_photos(job, s, folder, quiet=True)
         job.update(pending=list(dict.fromkeys(done_paths)), vids=vids)
         final = []
         for k, p in enumerate(dict.fromkeys(done_paths)):
@@ -978,17 +1000,19 @@ def _work(job):
             final = [target]
             job["title"] = up["title"]
             job["upgraded"] = f"Replaced your earlier {up['from']}p copy with {up['to']}p (the old one is in the Trash)"
+        videos = list(final)
+        final += [p for p in photos if p not in final]
         remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
         job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
-        job.update(status="done", progress=100, paths=final,
+        job.update(status="done", progress=100, paths=final, photos=len(photos),
                    detail=job.get("upgraded") or ("Already in your folder (saved before)" if job.get("already") else ""))
-        _, got, _, dur = media_info(final[0])
+        got, dur = (media_info(videos[0])[1], media_info(videos[0])[3]) if videos else (0, 0)
         job["height"] = got
         add_history({"id": job["id"], "url": job["url"], "site": job["site"], "title": job["title"] or
                      os.path.splitext(os.path.basename(final[0]))[0], "uploader": job["uploader"],
-                     "thumbnail": job["thumbnail"], "quality": label, "height": got,
-                     "duration": job["duration"] or dur, "paths": final, "saved": time.time(),
-                     "posted": job.get("posted", "")})
+                     "thumbnail": job["thumbnail"], "quality": label if videos else "Photos", "height": got,
+                     "duration": (job["duration"] or dur) if videos else 0, "paths": final, "saved": time.time(),
+                     "posted": job.get("posted", ""), "photos": len(photos)})
         if s["notify"]:
             notify(f"Saved to {os.path.basename(folder)}", job["title"] or os.path.basename(final[0]))
         if s["reveal_when_done"]:
@@ -1016,6 +1040,232 @@ def _stopped(job):
     else:
         job.update(status="cancelled", detail="Stopped", progress=0)
         _drop_partial(job["id"])
+
+
+# ---------------------------------------------------------------- photos
+# Photo posts (Instagram photos and carousels, X, TikTok photo posts, Facebook, Pinterest, Reddit, Tumblr, Bluesky…)
+# come from gallery-dl, which asks each site for the original upload (X "orig", Instagram's biggest version). YouTube
+# posts are read straight from the post's page. Videos still come from yt-dlp: photos are looked for when a link has
+# no video, and also next to the videos of a post that can mix both (an Instagram carousel, an X post).
+PHOTO_EXT = {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "bmp", "tif", "tiff"}
+MIXED = re.compile(r"instagram\.com/(?:[^/?#]+/)?p/|(?:x|twitter)\.com/[^/?#]+/status/|bsky\.app/profile/[^/]+/post/")
+_photo_lock = threading.Lock()   # gallery-dl keeps its settings in one place, so one photo post at a time
+_find_lock = threading.Lock()
+
+
+def _yt_post(url):
+    """The id of a YouTube post (youtube.com/post/<id>, or a channel's community tab ?lb=<id>), else ''."""
+    if "youtube.com" not in (url or ""):
+        return ""
+    m = re.search(r"youtube\.com/post/([\w-]+)", url) or re.search(r"[?&]lb=([\w-]+)", url)
+    return m.group(1) if m else ""
+
+
+def photo_link(url):
+    """True when the link can hold photos: a site gallery-dl knows, or a YouTube post."""
+    if _yt_post(url):
+        return True
+    with _find_lock:   # gallery-dl loads its list of sites on first use, which isn't safe from two saves at once
+        try:
+            from gallery_dl import extractor
+            return extractor.find(url) is not None
+        except Exception:
+            return False
+
+
+def _walk(o, key):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == key:
+                yield v
+            yield from _walk(v, key)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _walk(v, key)
+
+
+def _text_of(t):
+    return "".join(r.get("text", "") for r in (t or {}).get("runs") or []) or (t or {}).get("simpleText", "")
+
+
+def _yt_post_photos(job, s, tmp):
+    """The photos of a YouTube post at their original size ("=s0" asks YouTube for the uploaded picture)."""
+    opts = {"quiet": True, "no_warnings": True, "socket_timeout": 20, "logger": _Quiet()}
+    if s["browser"]:
+        prof = login_profile(s["browser"], "YouTube")
+        opts["cookiesfrombrowser"] = (s["browser"], prof) if prof else (s["browser"],)
+    out = []
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        html = ydl.urlopen(f"https://www.youtube.com/post/{_yt_post(job['url'])}").read().decode("utf-8", "replace")
+        m = re.search(r"var ytInitialData\s*=\s*(\{.*?\});\s*</script>", html, re.S)
+        if not m:
+            return out
+        data = json.loads(m.group(1))
+        post = next(_walk(data, "backstagePostRenderer"), None) or {}
+        meta = {"title": _text_of(post.get("contentText")), "uploader": _text_of(post.get("authorText"))}
+        for n, r in enumerate(_walk(post, "backstageImageRenderer"), 1):
+            if job["_cancel"]:
+                raise Cancelled()
+            u = r["image"]["thumbnails"][-1]["url"]
+            u = re.sub(r"=[^/=]*$", "", u) + "=s0"
+            job["detail"] = f"Saving photo {n}…"
+            resp = ydl.urlopen(u)
+            ext = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(
+                (resp.headers.get("Content-Type") or "").split(";")[0], "jpg")
+            p = os.path.join(tmp, f"{n:03d}.{ext}")
+            with open(p, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            out.append((p, dict(meta), u))
+    return out
+
+
+class _PhotoLog(logging.Handler):
+    """Keeps gallery-dl's error messages (from this thread only) so the page can say what went wrong."""
+
+    def __init__(self):
+        super().__init__(level=40)
+        self.tid, self.errors = threading.get_ident(), []
+
+    def emit(self, record):
+        if record.thread == self.tid:
+            self.errors.append(record.getMessage())
+
+
+def _gallery_photos(job, s, tmp):
+    """The photos of a post, as the site's original files. Videos and music in the post are skipped here."""
+    from gallery_dl import config as gconf, job as gjob, exception as gexc
+    found = []
+
+    class _Job(gjob.DownloadJob):
+        def handle_url(self, url, kwdict):
+            if job["_cancel"]:
+                raise gexc.StopExtraction()
+            if (kwdict.get("extension") or "").lower() not in PHOTO_EXT:
+                return
+            n = len(found) + 1
+            job["detail"] = f"Saving photo {n}" + (f" of {kwdict['count']}" if kwdict.get("count") else "") + "…"
+            super().handle_url(url, kwdict)
+            p = self.pathfmt.path
+            if p and os.path.exists(p):
+                found.append((p, dict(kwdict), url))
+                job["got"] = job["size"] = job.get("got", 0) + os.path.getsize(p)
+
+    while not _photo_lock.acquire(timeout=0.3):
+        if job["_cancel"]:
+            raise Cancelled()
+    log = _PhotoLog()
+    logging.getLogger().addHandler(log)
+    cookies = os.path.join(tmp, "..", "cookies.txt")
+    try:
+        gconf.clear()
+        gconf.set(("cache",), "file", os.path.join(DATA, "photos-cache.sqlite3"))
+        gconf.set(("output",), "mode", "null")
+        for k, v in {"base-directory": tmp, "directory": [], "videos": False, "audio": False, "timeout": 20,
+                     "retries": 3, "skip": False, "image-range": "1-500"}.items():
+            gconf.set(("extractor",), k, v)
+        if s["browser"]:   # the same login the videos use (read the same way, so it works wherever that works)
+            from yt_dlp.cookies import extract_cookies_from_browser
+            prof = login_profile(s["browser"], job["site"])
+            jar = extract_cookies_from_browser(s["browser"], prof, logger=_CookieLog())
+            jar.filename = cookies
+            jar.save(ignore_discard=True, ignore_expires=True)
+            gconf.set(("extractor",), "cookies", cookies)
+        for attempt in range(2):   # a site that is slowing us down sometimes answers with nothing: ask once more
+            _Job(job["url"]).run()
+            if found or job["_cancel"] or attempt:
+                break
+            job["detail"] = "Looking for photos again…"
+            for _ in range(15):
+                if job["_cancel"]:
+                    break
+                time.sleep(0.2)
+    finally:
+        logging.getLogger().removeHandler(log)
+        gconf.clear()
+        _photo_lock.release()
+        if os.path.exists(cookies):
+            os.remove(cookies)
+    if job["_cancel"]:
+        raise Cancelled()
+    if not found and log.errors:
+        raise RuntimeError(log.errors[-1])
+    return found
+
+
+def _photo_meta(kw):
+    """Title, who posted it and the posted day, from what gallery-dl tells about a photo (each site names them
+    differently)."""
+    title = next((kw.get(k) for k in ("content", "desc", "description", "caption", "title", "text")
+                  if isinstance(kw.get(k), str) and kw.get(k).strip()), "")
+    who = kw.get("author") if isinstance(kw.get("author"), dict) else {}
+    user = kw.get("user") if isinstance(kw.get("user"), dict) else {}
+    uploader = next((v for v in (kw.get("uploader"), kw.get("username"), kw.get("fullname"), who.get("nick"),
+                                 who.get("name"), who.get("uniqueId"), user.get("name"),
+                                 kw.get("user") if isinstance(kw.get("user"), str) else "") if v), "")
+    d = kw.get("date")
+    day = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else (d[:10] if isinstance(d, str) and DATED.match(d[:10] + " ") else "")
+    return title.strip().split("\n")[0], uploader, day
+
+
+def _photos_saved_before(url):
+    key = (_norm_url(url), _yt_post(url))
+    for h in load_history():
+        if h.get("photos") and (_norm_url(h.get("url")), _yt_post(h.get("url"))) == key and h.get("paths") \
+                and all(os.path.exists(p) for p in h["paths"]) and not any(
+                    p.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a")) for p in h["paths"]):
+            return h
+    return None
+
+
+def save_photos(job, s, folder, quiet=False):
+    """Saves the post's photos into the folder and returns their paths ([] when the post has none). `quiet` (photos
+    next to the videos of a mixed post) never fails the save: a problem only means no extra photos."""
+    tmp = os.path.join(PARTIAL, job["id"], "photos")
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, exist_ok=True)
+    if not quiet:
+        before = _photos_saved_before(job["url"])
+        if before:
+            job.update(already=True, title=job["title"] or before.get("title", ""),
+                       thumbnail=job["thumbnail"] or before.get("thumbnail", ""), photo_count=len(before["paths"]))
+            return list(before["paths"])
+        job["detail"] = "Looking for photos…"
+    try:
+        got = _yt_post_photos(job, s, tmp) if _yt_post(job["url"]) else _gallery_photos(job, s, tmp)
+    except Cancelled:
+        raise
+    except Exception:
+        if quiet:
+            return []
+        raise
+    if not got:
+        return []
+    title, uploader, day = _photo_meta(got[0][1])
+    if quiet and job["title"]:   # photos next to a post's videos are named like the videos
+        title = job["title"]
+    else:
+        title = title or job["title"] or (f"Photo by {uploader}" if uploader else f"{job['site']} photo")
+        job["title"] = title[:120]
+    job["uploader"] = job.get("uploader") or uploader
+    job["thumbnail"] = job.get("thumbnail") or got[0][2]
+    job["posted"] = job.get("posted") or day
+    where = os.path.join(folder, safe_name(job["site"], 40)) if s["site_folders"] else folder
+    os.makedirs(where, exist_ok=True)
+    stem = (day + " " if s.get("date_in_name") and day else "") + safe_name(title, 90)
+    final = []
+    with _names_lock:
+        for n, (p, _, _) in enumerate(got, 1):
+            ext = os.path.splitext(p)[1].lower().replace(".jpeg", ".jpg")
+            name = f"{stem} {n}" if len(got) > 1 else stem
+            target, k = os.path.join(where, name + ext), 1
+            while os.path.exists(target) or target in _reserved:
+                k += 1
+                target = os.path.join(where, f"{name} ({k}){ext}")
+            shutil.move(p, target)
+            final.append(target)
+    shutil.rmtree(tmp, ignore_errors=True)
+    job["photo_count"] = job.get("photo_count", 0) + len(final)
+    return final
 
 
 # ---------------------------------------------------------------- "Use my login from" test
@@ -1211,8 +1461,8 @@ def update_downloader(background=False):
         if FROZEN:
             return _update_frozen()
         uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
-        cmd = ([uv, "pip", "install", "-q", "--python", sys.executable, "-U", "yt-dlp[default]"] if os.path.exists(uv)
-               else [sys.executable, "-m", "pip", "install", "-q", "-U", "yt-dlp[default]"])
+        cmd = ([uv, "pip", "install", "-q", "--python", sys.executable, "-U", "yt-dlp[default]", "gallery-dl"]
+               if os.path.exists(uv) else [sys.executable, "-m", "pip", "install", "-q", "-U", "yt-dlp[default]", "gallery-dl"])
         r = subprocess.run(cmd, capture_output=True, text=True)
         out = subprocess.run([sys.executable, "-c", "import yt_dlp;print(yt_dlp.version.__version__)"],
                              capture_output=True, text=True).stdout.strip()

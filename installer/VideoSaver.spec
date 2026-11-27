@@ -21,7 +21,7 @@ a = Analysis(
           + collect_data_files("yt_dlp_ejs") + collect_data_files("imageio_ffmpeg", include_py_files=False)
           + copy_metadata("yt-dlp"),
     # yt-dlp loads some parts by name; the whole standard library helps a newer downloader (fetched later) load
-    hiddenimports=["server", "saver", "saver_api", "app_update"] + collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs")
+    hiddenimports=["server", "saver", "saver_api", "app_update"] + collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + collect_submodules("gallery_dl")
                   + ["sqlite3", "xml.etree.ElementTree", "http.cookiejar", "email.utils", "hmac", "secrets",
                      "uuid", "zipfile", "tarfile", "lzma", "bz2", "concurrent.futures", "unittest.mock"],
     excludes=["tkinter", "matplotlib", "numpy", "PIL", "IPython", "pytest"],
