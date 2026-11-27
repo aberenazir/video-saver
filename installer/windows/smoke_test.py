@@ -4,6 +4,7 @@
 Download tests from GitHub's servers are informative only: sites often block data-centre computers.
 """
 import json, os, subprocess, sys, tempfile, time, urllib.request
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # the Windows console can't print "→" otherwise
 
 T = tempfile.mkdtemp(prefix="vs-test-")
 os.environ.update(SAVER_DATA=os.path.join(T, "data"), SAVER_FOLDER=os.path.join(T, "videos"))
