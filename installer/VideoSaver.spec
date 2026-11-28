@@ -37,9 +37,13 @@ if not WIN:
     app = BUNDLE(
         coll, name="Video Saver.app", icon=os.path.join(HERE, "AppIcon.icns"), bundle_identifier="local.videosaver.app",
         info_plist={
-            "CFBundleName": "Video Saver", "CFBundleDisplayName": "Video Saver",
+            # People see "ThumbStudio Video Saver" (Finder, Dock, menu bar): build_mac.sh adds that name as en.lproj/InfoPlist.strings.
+            # CFBundleDisplayName stays the file name "Video Saver" (macOS only shows the new name when they match),
+            # so the app file, updates and data keep their old name.
+            "CFBundleName": "ThumbStudio Video Saver", "CFBundleDisplayName": "Video Saver",
+            "LSHasLocalizedDisplayName": True, "CFBundleDevelopmentRegion": "en",
             "CFBundleShortVersionString": VERSION, "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "12.0", "LSApplicationCategoryType": "public.app-category.utilities",
             "NSHighResolutionCapable": True,
-            "NSAppleEventsUsageDescription": "Video Saver uses this to show notifications.",
+            "NSAppleEventsUsageDescription": "ThumbStudio Video Saver uses this to show notifications.",
         })

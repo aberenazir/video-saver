@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Video Saver</title>
+<title>ThumbStudio Video Saver</title>
 <style>
 :root{
   --bg:#f6f5f2; --panel:#ffffff; --ink:#1d1c1a; --muted:#6c6a64; --line:#e4e1da; --soft:#efede7;
@@ -74,7 +74,7 @@ dialog h3{margin:0 0 14px}
 <div class="wrap">
   <header>
     <img src="/icon.png" alt="">
-    <h1>Video Saver</h1>
+    <h1>ThumbStudio Video Saver</h1>
     <div class="sp"></div>
     <button class="btn primary" id="appUpd" style="display:none" onclick="appUpdate()"></button>
     <button class="btn" onclick="openSettings()">Settings</button>
@@ -115,7 +115,7 @@ dialog h3{margin:0 0 14px}
     <button class="btn small" id="datingBtn" onclick="addDates()">Add dates</button></div>
   <div class="row"><label for="sMac"><span id="macLabel">Make every video Mac-friendly</span><span class="hint" id="macHint">Converts to H.264 + AAC MP4 when needed, so it opens in QuickTime, iMovie, CapCut and ThumbStudio Video. 4K YouTube can take a few minutes.</span></label>
     <input type="checkbox" id="sMac" onchange="setS({mac_friendly:this.checked})"></div>
-  <div class="row"><label for="sBrowser">Use my login from<span class="hint" id="loginHint">For posts you need to be logged in to see (Instagram stories, private or age-limited videos). Video Saver reads that browser's login on this Mac only; it never sees your password. Chrome may ask once for your Mac password: choose "Always Allow".</span></label>
+  <div class="row"><label for="sBrowser">Use my login from<span class="hint" id="loginHint">For posts you need to be logged in to see (Instagram stories, private or age-limited videos). ThumbStudio Video Saver reads that browser's login on this Mac only; it never sees your password. Chrome may ask once for your Mac password: choose "Always Allow".</span></label>
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end"><select id="sBrowser" onchange="setS({browser:this.value}); $('loginResult').textContent=''"></select>
     <button class="btn small" id="testBtn" onclick="testLogin()">Test</button></div></div>
   <div id="loginResult" style="font-size:13px;margin:-4px 0 8px"></div>
@@ -125,7 +125,7 @@ dialog h3{margin:0 0 14px}
     <input type="checkbox" id="sReveal" onchange="setS({reveal_when_done:this.checked})"></div>
   <div class="row"><label>Update downloader<span class="hint" id="sUpdate">Sites change often. If a site stops working, update (it also updates by itself once a week).</span></label>
     <button class="btn small" id="updBtn" onclick="updateDl()">Update</button></div>
-  <div class="row"><label>Video Saver version<span class="hint" id="sApp"></span></label>
+  <div class="row"><label>ThumbStudio Video Saver version<span class="hint" id="sApp"></span></label>
     <button class="btn small" id="appChk" onclick="checkApp()">Check for updates</button></div>
   <div style="text-align:right;margin-top:14px"><button class="btn primary" onclick="settingsDlg.close()">Done</button></div>
 </dialog>
@@ -153,7 +153,7 @@ function forWindows(){
   $('openFolderBtn').textContent = 'Open in File Explorer';
   $('macLabel').textContent = 'Make every video play everywhere';
   $('macHint').textContent = 'Converts to H.264 + AAC MP4 when needed, so it opens in the Photos app, Media Player, CapCut, Premiere and on phones. 4K YouTube can take a few minutes.';
-  $('loginHint').textContent = "For posts you need to be logged in to see (Instagram stories, private or age-limited videos). Video Saver reads that browser's login on this PC only; it never sees your password. On Windows only Firefox works: Chrome, Edge, Brave, Opera and Vivaldi lock their logins.";
+  $('loginHint').textContent = "For posts you need to be logged in to see (Instagram stories, private or age-limited videos). ThumbStudio Video Saver reads that browser's login on this PC only; it never sees your password. On Windows only Firefox works: Chrome, Edge, Brave, Opera and Vivaldi lock their logins.";
   $('notifyLabel').textContent = 'Notification when a video is saved';
   $('revealLabel').textContent = "Show the video in File Explorer when it's saved";
 }
@@ -283,7 +283,7 @@ async function appUpdate(){
   if(U.state==='available'){ await post('/api/app-update/install'); return refreshApp(); }
   if(U.state==='ready'){
     const n = S.jobs.filter(j=>j.status==='working'||j.status==='waiting').length;
-    if(n && !confirm(`Video Saver is still saving ${n} video${n>1?'s':''}. Restart anyway? (Press Try again on them afterwards.)`)) return;
+    if(n && !confirm(`ThumbStudio Video Saver is still saving ${n} video${n>1?'s':''}. Restart anyway? (Press Try again on them afterwards.)`)) return;
     await post('/api/app-update/restart'); refreshApp();
   }
 }

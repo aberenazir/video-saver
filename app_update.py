@@ -174,7 +174,7 @@ def restart():
         new = os.path.join(WORK, "new", "Video Saver.app")
         if _asset.get("manual"):
             subprocess.run(["open", "-R", new])
-            STATE.update(detail="Drag the new Video Saver (shown in Finder) into Applications, replacing the old one.")
+            STATE.update(detail="Drag the new ThumbStudio Video Saver (shown in Finder) into Applications, replacing the old one.")
             return STATE
         script = os.path.join(WORK, "swap.sh")
         with open(script, "w") as f:

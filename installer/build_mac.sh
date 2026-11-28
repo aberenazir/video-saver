@@ -46,6 +46,9 @@ rm -rf "$WORK/dist" "$WORK/build"
 "$VENV/bin/pyinstaller" --noconfirm --log-level WARN --distpath "$WORK/dist" --workpath "$WORK/build" \
   installer/VideoSaver.spec
 APP="$WORK/dist/Video Saver.app"
+# The name people see in Finder, the Dock, Launchpad and Spotlight (the file stays "Video Saver.app"; see the spec)
+mkdir -p "$APP/Contents/Resources/en.lproj"
+printf '"CFBundleName" = "ThumbStudio Video Saver";\n"CFBundleDisplayName" = "ThumbStudio Video Saver";\n' > "$APP/Contents/Resources/en.lproj/InfoPlist.strings"
 xattr -cr "$APP"
 # Signature: with the "Video Saver Local Signing" certificate when this Mac has it (made once, kept in the login
 # Keychain). Then every build counts as the same app, so macOS keeps Full Disk Access across rebuilds and updates.
@@ -66,5 +69,5 @@ ln -s /Applications "$STAGE/Applications"
 cp "$SRC/installer/dmg-README.txt" "$STAGE/READ ME FIRST.txt"
 DMG="$OUT/Video Saver.dmg"
 rm -f "$DMG"
-hdiutil create -quiet -volname "Video Saver" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
+hdiutil create -quiet -volname "ThumbStudio Video Saver" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
 echo "Built: $DMG ($(du -h "$DMG" | cut -f1)) for $ARCH Macs"

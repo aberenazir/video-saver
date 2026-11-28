@@ -42,13 +42,13 @@ def run_server():
 
 
 def mac_branding():
-    """Show "Video Saver" (not "Python") in the menu bar and the app's icon in the Dock (only needed from source)."""
+    """Show "ThumbStudio Video Saver" (not "Python") in the menu bar and the app's icon in the Dock (only needed from source)."""
     if not MAC or FROZEN:
         return
     try:
         from Foundation import NSBundle
         info = NSBundle.mainBundle().localizedInfoDictionary() or NSBundle.mainBundle().infoDictionary()
-        info["CFBundleName"] = "Video Saver"
+        info["CFBundleName"] = "ThumbStudio Video Saver"
         from AppKit import NSApplication, NSImage
         icon = NSImage.alloc().initWithContentsOfFile_(os.path.join(APP, "icon_large.png"))
         if icon:
@@ -109,7 +109,7 @@ def main():
             time.sleep(0.25)
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     api = Api()
-    api.window = webview.create_window("Video Saver", URL, js_api=api, width=980, height=760, min_size=(620, 520),
+    api.window = webview.create_window("ThumbStudio Video Saver", URL, js_api=api, width=980, height=760, min_size=(620, 520),
                                        text_select=True, background_color="#151413")
 
     def on_closing():
@@ -120,8 +120,8 @@ def main():
         api.window.confirm_close = bool(work)
         if work:
             api.window.localization["global.quitConfirmation"] = (
-                f"Video Saver is still saving {len(work)} video{'s' if len(work) > 1 else ''}.\n\nIf you quit now "
-                "they carry on from where they stopped the next time you open Video Saver.")
+                f"ThumbStudio Video Saver is still saving {len(work)} video{'s' if len(work) > 1 else ''}.\n\nIf you quit now "
+                "they carry on from where they stopped the next time you open ThumbStudio Video Saver.")
         return True
 
     api.window.events.closing += on_closing

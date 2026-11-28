@@ -16,7 +16,7 @@ BUNDLE = getattr(sys, "_MEIPASS", "")   # the frozen app's own files
 DATA = os.environ.get("SAVER_DATA") or (
     os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Video Saver") if WINDOWS
     else os.path.expanduser("~/Library/Application Support/Video Saver"))
-APP_NAME = os.environ.get("SAVER_APP") or "Video Saver"
+APP_NAME = os.environ.get("SAVER_APP") or "ThumbStudio Video Saver"
 os.makedirs(DATA, exist_ok=True)
 SETTINGS_FILE = os.path.join(DATA, "settings.json")
 HISTORY_FILE = os.path.join(DATA, "history.json")

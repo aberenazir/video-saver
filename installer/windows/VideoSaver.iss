@@ -9,12 +9,12 @@
 
 [Setup]
 AppId={{6F1C7E52-3B8D-4E0A-9C64-7A1E5D2B9F31}
-AppName=Video Saver
+AppName=ThumbStudio Video Saver
 AppVersion={#AppVersion}
-AppVerName=Video Saver {#AppVersion}
-AppPublisher=Video Saver
+AppVerName=ThumbStudio Video Saver {#AppVersion}
+AppPublisher=ThumbStudio Video Saver
 DefaultDirName={localappdata}\Programs\Video Saver
-DefaultGroupName=Video Saver
+DefaultGroupName=ThumbStudio Video Saver
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\..\dist
@@ -29,16 +29,21 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 
 [Tasks]
-Name: "desktopicon"; Description: "Put Video Saver on the desktop"; GroupDescription: "Shortcuts:"
+Name: "desktopicon"; Description: "Put ThumbStudio Video Saver on the desktop"; GroupDescription: "Shortcuts:"
 
 [Files]
 Source: "..\..\dist\Video Saver\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; shortcuts from before the rename (they had the old name; the new ones replace them)
+Type: files; Name: "{group}\Video Saver.lnk"
+Type: files; Name: "{userdesktop}\Video Saver.lnk"
+
 [Icons]
-Name: "{group}\Video Saver"; Filename: "{app}\Video Saver.exe"
-Name: "{userdesktop}\Video Saver"; Filename: "{app}\Video Saver.exe"; Tasks: desktopicon
+Name: "{group}\ThumbStudio Video Saver"; Filename: "{app}\Video Saver.exe"
+Name: "{userdesktop}\ThumbStudio Video Saver"; Filename: "{app}\Video Saver.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Video Saver.exe"; Description: "Open Video Saver now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Video Saver.exe"; Description: "Open ThumbStudio Video Saver now"; Flags: nowait postinstall skipifsilent
 ; an update from inside the app runs this Setup silently: then open the new version straight away
 Filename: "{app}\Video Saver.exe"; Flags: nowait skipifnotsilent

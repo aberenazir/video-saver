@@ -1,11 +1,12 @@
-# Video Saver
+# ThumbStudio Video Saver (formerly Video Saver)
 
 Paste a link from YouTube, Instagram, TikTok, X, Facebook, Threads, Reddit, Pinterest, Snapchat, Vimeo, Twitch,
 Dailymotion, Bilibili, SoundCloud (and ~1,800 other sites) and the video is saved into a Finder folder you choose.
 
 ## Open it
 
-Double-click **Video Saver** in Applications (or Launchpad / Spotlight). It opens in its own window with its icon in
+Double-click **ThumbStudio Video Saver** in Applications (or Launchpad / Spotlight). The app file is still
+`Video Saver.app` underneath, so updates, settings and the Downloads › Video Saver folder carry on. It opens in its own window with its icon in
 the Dock. Close the window or press ⌘Q to quit.
 
 ## Use it
