@@ -473,6 +473,10 @@ class _UniqueName(yt_dlp.postprocessor.PostProcessor):
         self.job, self.mine = job, mine
 
     def run(self, info):
+        # the parts about to be downloaded and their sizes, so the total is right from the first second
+        self.job["_fmts"] = (info.get("playlist_index") or 1,
+                             [(f.get("format_id"), f.get("filesize"), f.get("filesize_approx"))
+                              for f in (info.get("requested_formats") or [info])])
         info["title"] = _better_title(info)
         base = info["title"]
         # the day it was posted (sites keep only that, not the day it was filmed): at the start of the name when
@@ -818,17 +822,29 @@ def nice_size(b):
 
 def _count_size(job, info, d):
     """How big the whole download is (video + sound, every video of a list) and how much has come in so far.
-    Before a part starts, the site's own size for it is used, so the total is known from the first second."""
+    Before a part starts, the site's own size for it is used, so the total is known from the first second.
+    Exact sizes are shown as they are. A total that can only be guessed (a site that gives no size, or a stream of
+    pieces) is shown as "about …" and only moves when it's more than 10% off, so it doesn't jump up and down."""
     parts = job.setdefault("_parts", {})
     i = job["index"]
-    tot = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+    exact_tot = d.get("total_bytes")
+    tot = exact_tot or d.get("total_bytes_estimate") or 0
     got = d.get("downloaded_bytes") or (tot if d.get("status") == "finished" else 0)
-    parts[(i, info.get("format_id") or d.get("filename") or "")] = (got, max(tot, got))
-    fmts = info.get("requested_formats") or [info]
-    waiting = sum((f.get("filesize") or f.get("filesize_approx") or 0) for f in fmts
-                  if (i, f.get("format_id")) not in parts)  # the sound part, before it starts
-    job["size"] = sum(t for _, t in parts.values()) + waiting
-    job["got"] = min(job["size"], sum(g for g, _ in parts.values()))
+    parts[(i, info.get("format_id") or d.get("filename") or "")] = (
+        got, max(tot, got), bool(exact_tot) or d.get("status") == "finished")
+    # every part of this video (picture + sound), known before the download starts (see _UniqueName)
+    fi, fmts = job.get("_fmts") or (i, [])
+    if fi != i or not fmts:
+        fmts = [(f.get("format_id"), f.get("filesize"), f.get("filesize_approx"))
+                for f in (info.get("requested_formats") or [info])]
+    waiting = [(fs, fa) for fid, fs, fa in fmts if (i, fid) not in parts]   # e.g. the sound, before it starts
+    size = sum(t for _, t, _ in parts.values()) + sum(fs or fa or 0 for fs, fa in waiting)
+    exact = all(e for _, _, e in parts.values()) and all(fs for fs, _ in waiting)
+    old = job.get("size") or 0
+    if exact or not old or job.get("size_exact") or abs(size - old) > old * 0.1:
+        job["size"] = size
+    job["size_exact"] = exact
+    job["got"] = min(job["size"], sum(g for g, _, _ in parts.values()))
 
 
 def _run(job):
@@ -889,7 +905,8 @@ def _work(job):
             sp, eta = d.get("speed"), d.get("eta")
             extra = (f" · {sp / 1e6:.1f} MB/s" if sp else "") + (f" · {int(eta)} s left" if eta else "")
             many = f" ({job['index']} of {job['count']})" if job["count"] > 1 else ""
-            of = f" · {nice_size(job['got'])} of {nice_size(job['size'])}" if job.get("size") else ""
+            of = (f" · {nice_size(job['got'])} of {'' if job.get('size_exact') else 'about '}{nice_size(job['size'])}"
+                  if job.get("size") else "")
             job["detail"] = f"Downloading{many}{of}{extra}"
         elif d.get("status") == "finished":
             job["detail"] = "Putting video and sound together…" if height else "Making the MP3…"
@@ -1006,6 +1023,7 @@ def _work(job):
         final += [p for p in photos if p not in final]
         remember_files(final, vids[0] if len(vids) == 1 else "", job["url"])
         job["size"] = sum(os.path.getsize(p) for p in final if os.path.exists(p))  # the real size on disk
+        job["size_exact"] = True
         job.update(status="done", progress=100, paths=final, photos=len(photos),
                    detail=job.get("upgraded") or ("Already in your folder (saved before)" if job.get("already") else ""))
         got, dur = (media_info(videos[0])[1], media_info(videos[0])[3]) if videos else (0, 0)

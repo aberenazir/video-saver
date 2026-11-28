@@ -184,12 +184,12 @@ function drawJobs(){
       : `<button class="btn small" title="Stop for now and carry on later from here" onclick="post('/api/pause/${j.id}').then(refresh)">Pause</button><button class="btn small" onclick="post('/api/cancel/${j.id}').then(refresh)">Stop</button>`;
     const state = j.status==='done' ? `<span class="ok">✓ Saved${what(j.paths.length, j.photos) ? ' '+what(j.paths.length, j.photos) : ''}${j.height?' · '+hq(j.height):''}${j.detail?' · '+esc(j.detail):''}</span>`
       : j.status==='cancelled' ? 'Stopped'
-      : j.status==='paused' ? esc(j.detail) + (j.size && j.got ? ` · ${fmtSize(j.got)} of ${fmtSize(j.size)} saved so far` : '')
+      : j.status==='paused' ? esc(j.detail) + (j.size && j.got ? ` · ${fmtSize(j.got)} of ${j.size_exact===false?'about ':''}${fmtSize(j.size)} saved so far` : '')
       : esc(j.detail);
     return `<div class="item">
       ${j.thumbnail ? `<img class="thumb" src="${esc(j.thumbnail)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : `<div class="thumb"></div>`}
       <div class="body"><div class="title">${esc(j.title || j.url)}</div>
-        <div class="meta"><span class="badge">${esc(j.site)}</span>${j.status==='done'&&j.photos&&!j.height?'':`<span>${esc(j.quality_label)}</span>`}${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="How big the file is">${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
+        <div class="meta"><span class="badge">${esc(j.site)}</span>${j.status==='done'&&j.photos&&!j.height?'':`<span>${esc(j.quality_label)}</span>`}${j.duration?`<span>${fmtDur(j.duration)}</span>`:''}${j.size?`<span title="${j.size_exact===false?'The site doesn\'t say the exact size: this is a close guess':'How big the file is'}">${j.size_exact===false?'about ':''}${fmtSize(j.size)}</span>`:''}<span>${state}</span></div>
         ${j.status==='working'||j.status==='waiting'||j.status==='paused' ? `<div class="bar${j.status==='paused'?' paused':''}"><i style="width:${j.progress}%"></i></div>` : ''}
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}</div>
       <div class="acts">${acts}</div></div>`;
