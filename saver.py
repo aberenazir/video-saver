@@ -921,10 +921,12 @@ def _work(job):
         if height:
             # "res" is the SHORT side, so 1080p means 1080x1920 for a vertical Reel/Short/TikTok too (a height
             # limit would pick 608x1080). Order: sharpest, then smoothest (60fps), then the Mac-friendly codec
-            # (H.264 avoids a lossy conversion), then the highest bitrate.
+            # (H.264 avoids a lossy conversion), then a plain file over a stream of pieces ("proto": YouTube's
+            # https/DASH copy says its exact size, its HLS twin doesn't, so the "45 MB of 120 MB" total would jump
+            # around), then the highest bitrate.
             opts.update(format="bv*+ba/b", merge_output_format="mp4",
                         format_sort=(["res", "fps"] if job["quality"] == "best" else [f"res:{height}", "fps"])
-                        + [FAST_SORT, "br"])
+                        + [FAST_SORT, "proto", "br"])
         else:
             opts.update(format="ba/b", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
                                                          "preferredquality": "192"}])
