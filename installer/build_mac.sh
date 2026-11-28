@@ -16,7 +16,12 @@ mkdir -p "$WORK" "$OUT"
 
 echo "1/5 Python and packages"
 [ -x "$VENV/bin/python" ] || uv venv -q "$VENV" --python 3.12
-uv pip install -q --python "$VENV/bin/python" -U -r "$SRC/installer/requirements.txt" pyinstaller
+if [ -n "${NO_UPDATE:-}" ]; then   # NO_UPDATE=1: build with the packages already installed (slow internet)
+  uv pip install -q --offline --python "$VENV/bin/python" -r "$SRC/installer/requirements.txt" pyinstaller \
+    || { echo "!! a package is missing: run once without NO_UPDATE"; exit 1; }
+else
+  uv pip install -q --python "$VENV/bin/python" -U -r "$SRC/installer/requirements.txt" pyinstaller
+fi
 
 echo "2/5 JavaScript runtime (YouTube needs one for full quality)"
 # Deno is the one yt-dlp recommends (~40 MB download). If it can't be downloaded in time, a Node.js 22+ already on this
